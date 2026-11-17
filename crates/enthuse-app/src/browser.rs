@@ -592,6 +592,13 @@ impl Browser {
         self.rerender();
     }
 
+    /// A setting changed in Settings: show the resume label, the primary
+    /// action and the thumbnails as they now are.
+    pub fn settings_changed(&self) {
+        self.update_resume_label();
+        self.rerender();
+    }
+
     /// Shows the current listing again (re-sorted, new settings) without
     /// listing the folder again, so the list doesn't blank or scroll back.
     fn rerender(&self) {

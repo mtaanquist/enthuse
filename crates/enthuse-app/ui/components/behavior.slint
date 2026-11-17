@@ -9,6 +9,9 @@ export component ButtonBehavior {
     in property <bool> enabled: true;
     // Corner radius of the parent, so the ring follows its shape.
     in property <length> ring-radius;
+    // Off when the parent shows keyboard focus itself, e.g. a row inside a
+    // clipped card where the ring outside would be cut off.
+    in property <bool> show-ring: true;
     out property <bool> has-hover: touch.has-hover;
     out property <bool> pressed: touch.pressed;
     out property <bool> keyboard-focus;
@@ -57,7 +60,7 @@ export component ButtonBehavior {
 
     property <length> ring-outset: Theme.focus-ring-width + Theme.focus-ring-offset;
 
-    if root.keyboard-focus && root.enabled: Rectangle {
+    if root.show-ring && root.keyboard-focus && root.enabled: Rectangle {
         x: -root.ring-outset;
         y: -root.ring-outset;
         width: root.width + 2 * root.ring-outset;

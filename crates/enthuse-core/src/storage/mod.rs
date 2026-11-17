@@ -12,12 +12,13 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::settings::{self, FolderOverrides, PlaybackSettings};
 use crate::source::SourcePath;
+use crate::watched::{WatchedMode, WatchedRule, reaches_threshold};
 
-/// Fraction of a file that must be played before it counts as watched,
-/// unless changed with [`Store::set_watched_threshold`].
-pub const DEFAULT_WATCHED_THRESHOLD: f64 = 0.9;
-
+/// The watched rule's share of the file (see [`Store::watched_rule`]).
 const KEY_WATCHED_THRESHOLD: &str = "watched_threshold";
+const KEY_WATCHED_MODE: &str = "watched_mode";
+const KEY_WATCHED_REMAINING: &str = "watched_remaining";
+const KEY_AUTO_NEXT: &str = "auto_next";
 const KEY_RESUME: &str = "resume";
 const KEY_NETWORK_THUMBNAILS: &str = "network_thumbnails";
 
@@ -93,14 +94,6 @@ impl WatchState {
     /// Started but not finished: there is a position and it is not watched.
     pub fn in_progress(&self) -> bool {
         !self.watched && self.position.is_some_and(|p| p > 0.0)
-    }
-}
-
-/// Whether `position` of `duration` counts as watched at `threshold`.
-pub fn reaches_threshold(position: f64, duration: Option<f64>, threshold: f64) -> bool {
-    match duration {
-        Some(d) if d > 0.0 => position / d >= threshold,
-        _ => false,
     }
 }
 
@@ -276,7 +269,7 @@ impl Store {
     }
 
     /// Saves the playback position of a file when playback stops or pauses.
-    /// Marks it watched if the position is past the watched threshold.
+    /// Marks it watched if the position meets the watched rule.
     pub fn save_position(
         &self,
         source: SourceId,
@@ -284,7 +277,7 @@ impl Store {
         position: f64,
         duration: Option<f64>,
     ) -> Result<()> {
-        let watched = reaches_threshold(position, duration, self.watched_threshold()?);
+        let watched = reaches_threshold(position, duration, &self.watched_rule()?);
         self.write_position(source, path, position, duration, watched)
     }
 
@@ -337,29 +330,59 @@ impl Store {
 
     // Settings
 
-    /// Fraction of a file that must be played to count as watched.
-    pub fn watched_threshold(&self) -> Result<f64> {
-        let value: Option<String> = self
-            .conn
-            .query_row(
-                "SELECT value FROM settings WHERE key = ?1",
-                [KEY_WATCHED_THRESHOLD],
-                |r| r.get(0),
-            )
-            .optional()?;
-        Ok(value
+    /// When a file counts as watched (#41).
+    pub fn watched_rule(&self) -> Result<WatchedRule> {
+        let mut rule = WatchedRule::default();
+        if let Some(mode) = self
+            .setting(KEY_WATCHED_MODE)?
+            .as_deref()
+            .and_then(WatchedMode::parse)
+        {
+            rule.mode = mode;
+        }
+        if let Some(f) = self
+            .setting(KEY_WATCHED_THRESHOLD)?
             .and_then(|v| v.parse::<f64>().ok())
             .filter(|v| (0.0..=1.0).contains(v))
-            .unwrap_or(DEFAULT_WATCHED_THRESHOLD))
+        {
+            rule.fraction = f;
+        }
+        if let Some(r) = self
+            .setting(KEY_WATCHED_REMAINING)?
+            .and_then(|v| v.parse::<f64>().ok())
+            .filter(|v| v.is_finite() && *v >= 0.0)
+        {
+            rule.remaining = r;
+        }
+        Ok(rule)
     }
 
-    pub fn set_watched_threshold(&self, threshold: f64) -> Result<()> {
-        self.conn.execute(
-            "INSERT INTO settings (key, value) VALUES (?1, ?2)
-             ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-            params![KEY_WATCHED_THRESHOLD, threshold.clamp(0.0, 1.0).to_string()],
+    pub fn set_watched_rule(&self, rule: &WatchedRule) -> Result<()> {
+        // All three keys or none.
+        let tx = self.conn.unchecked_transaction()?;
+        self.set_setting(KEY_WATCHED_MODE, rule.mode.as_str())?;
+        self.set_setting(
+            KEY_WATCHED_THRESHOLD,
+            &rule.fraction.clamp(0.0, 1.0).to_string(),
         )?;
+        let remaining = if rule.remaining.is_finite() {
+            rule.remaining.max(0.0)
+        } else {
+            0.0
+        };
+        self.set_setting(KEY_WATCHED_REMAINING, &remaining.to_string())?;
+        tx.commit()?;
         Ok(())
+    }
+
+    /// Whether the next file in the folder starts when one ends. On unless
+    /// turned off.
+    pub fn auto_next(&self) -> Result<bool> {
+        Ok(self.setting(KEY_AUTO_NEXT)?.is_none_or(|v| v != "0"))
+    }
+
+    pub fn set_auto_next(&self, on: bool) -> Result<()> {
+        self.set_setting(KEY_AUTO_NEXT, if on { "1" } else { "0" })
     }
 
     fn setting(&self, key: &str) -> Result<Option<String>> {
@@ -422,6 +445,28 @@ impl Store {
             let path =
                 SourcePath::parse(&path).map_err(|e| StorageError::Corrupt(e.to_string()))?;
             out.insert(path, FolderOverrides { resume });
+        }
+        Ok(out)
+    }
+
+    /// Every folder override of every source, by source and path.
+    pub fn all_folder_overrides(&self) -> Result<Vec<(SourceId, SourcePath, FolderOverrides)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT source_id, path, resume FROM folder_settings ORDER BY source_id, path",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<bool>>(2)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, path, resume) = row?;
+            let path =
+                SourcePath::parse(&path).map_err(|e| StorageError::Corrupt(e.to_string()))?;
+            out.push((SourceId(id), path, FolderOverrides { resume }));
         }
         Ok(out)
     }
@@ -636,19 +681,77 @@ mod tests {
     }
 
     #[test]
-    fn watched_threshold_setting() {
+    fn watched_rule_setting() {
         let s = store();
-        assert_eq!(s.watched_threshold().unwrap(), DEFAULT_WATCHED_THRESHOLD);
-        s.set_watched_threshold(0.8).unwrap();
-        assert_eq!(s.watched_threshold().unwrap(), 0.8);
-        s.set_watched_threshold(5.0).unwrap();
-        assert_eq!(s.watched_threshold().unwrap(), 1.0);
+        assert_eq!(s.watched_rule().unwrap(), WatchedRule::default());
+        let rule = WatchedRule {
+            mode: WatchedMode::FirstOf,
+            fraction: 0.95,
+            remaining: 90.0,
+        };
+        s.set_watched_rule(&rule).unwrap();
+        assert_eq!(s.watched_rule().unwrap(), rule);
+        s.set_watched_rule(&WatchedRule {
+            fraction: 5.0,
+            remaining: -3.0,
+            ..rule
+        })
+        .unwrap();
+        let read = s.watched_rule().unwrap();
+        assert_eq!((read.fraction, read.remaining), (1.0, 0.0));
+        // A value from an older build, or edited by hand, falls back.
+        s.set_setting(KEY_WATCHED_MODE, "bogus").unwrap();
+        assert_eq!(s.watched_rule().unwrap().mode, WatchedMode::Percent);
 
         let src = s.add_source("local", "M", "/m").unwrap();
-        s.set_watched_threshold(0.5).unwrap();
+        s.set_watched_rule(&WatchedRule::percent(0.5)).unwrap();
         s.save_position(src, &p("a.mkv"), 50.0, Some(100.0))
             .unwrap();
         assert!(s.watch_state(src, &p("a.mkv")).unwrap().unwrap().watched);
+        // Time left: 3 hours with a minute to go counts.
+        s.set_watched_rule(&WatchedRule {
+            mode: WatchedMode::Remaining,
+            fraction: 0.9,
+            remaining: 120.0,
+        })
+        .unwrap();
+        s.save_position(src, &p("b.mkv"), 10_740.0, Some(10_800.0))
+            .unwrap();
+        assert!(s.watch_state(src, &p("b.mkv")).unwrap().unwrap().watched);
+        s.save_position(src, &p("c.mkv"), 9_720.0, Some(10_800.0))
+            .unwrap();
+        assert!(!s.watch_state(src, &p("c.mkv")).unwrap().unwrap().watched);
+    }
+
+    #[test]
+    fn auto_next_default_on() {
+        let s = store();
+        assert!(s.auto_next().unwrap());
+        s.set_auto_next(false).unwrap();
+        assert!(!s.auto_next().unwrap());
+    }
+
+    #[test]
+    fn lists_all_folder_overrides() {
+        let s = store();
+        let a = s.add_source("local", "A", "/a").unwrap();
+        let b = s.add_source("local", "B", "/b").unwrap();
+        s.set_folder_resume(b, &p("X"), Some(true)).unwrap();
+        s.set_folder_resume(a, &p("Y"), Some(false)).unwrap();
+        let all = s.all_folder_overrides().unwrap();
+        assert_eq!(
+            all,
+            vec![
+                (
+                    a,
+                    p("Y"),
+                    FolderOverrides {
+                        resume: Some(false)
+                    }
+                ),
+                (b, p("X"), FolderOverrides { resume: Some(true) }),
+            ]
+        );
     }
 
     #[test]
@@ -691,14 +794,6 @@ mod tests {
         assert!(!s.network_thumbnails().unwrap());
         s.set_network_thumbnails(true).unwrap();
         assert!(s.network_thumbnails().unwrap());
-    }
-
-    #[test]
-    fn threshold_needs_known_duration() {
-        assert!(!reaches_threshold(100.0, None, 0.9));
-        assert!(!reaches_threshold(100.0, Some(0.0), 0.9));
-        assert!(reaches_threshold(90.0, Some(100.0), 0.9));
-        assert!(!reaches_threshold(89.9, Some(100.0), 0.9));
     }
 
     #[test]

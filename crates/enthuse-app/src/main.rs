@@ -13,6 +13,7 @@ mod pip_geometry;
 mod playback;
 mod pointer;
 mod selftest;
+mod settings;
 mod thumbs;
 mod video;
 
@@ -115,6 +116,11 @@ fn run(
         store.clone(),
     );
     home.set_nav(&nav);
+    let settings = settings::Settings::new(&window, store.clone(), browser.clone());
+    {
+        let nav = nav.clone();
+        settings.on_change(move || nav.reload_settings());
+    }
     // No thumbnails in the self-test, which has no real files and must not
     // write to the user's cache.
     let thumb_dir = (!self_test)
@@ -147,6 +153,7 @@ fn run(
     let pip = pip::Pip::new(&window, browser.clone(), player.clone())?;
     playback.attach_side(pip.side());
     home.attach_side(pip.side());
+    settings.attach_side(pip.side());
     {
         let (pip, playback) = (pip.clone(), playback.clone());
         nav.set_on_leave_player(Box::new(move || {

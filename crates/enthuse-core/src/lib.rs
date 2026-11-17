@@ -16,3 +16,4 @@ pub mod storage;
 pub mod thumbs;
 pub mod time;
 pub mod up_next;
+pub mod watched;

@@ -8,10 +8,12 @@ import { Section, Shell, PlaceholderPage } from "components/sidebar.slint";
 import { BrowserModel, BrowserPage, Toast } from "browser.slint";
 import { HomeModel, HomePage } from "home.slint";
 import { PlayerModel, PlayerPage } from "player.slint";
+import { SettingsModel, SettingsPage } from "settings.slint";
 
 export { BrowserModel, BrowserItem, ItemKind, ItemBadge } from "browser.slint";
 export { HomeModel, ContinueItem, SourceTileItem, SourceIcon } from "home.slint";
 export { PlayerModel, PlayerLayout, TrackItem } from "player.slint";
+export { SettingsModel, OverrideItem } from "settings.slint";
 
 export { Section }
 //
@@ -464,6 +466,10 @@ component AppScreens inherits Rectangle {
         if (root.section == Section.home) {
             HomeModel.refresh();
         }
+        // Folder overrides may have changed while browsing.
+        if (root.section == Section.settings) {
+            SettingsModel.refresh();
+        }
     }
     changed view-mode => { KeyFocus.restore(); }
     changed loading => { KeyFocus.restore(); }
@@ -487,10 +493,7 @@ component AppScreens inherits Rectangle {
             text: "Recently played files will show here.";
         }
 
-        if root.section == Section.settings: PlaceholderPage {
-            title: "Settings";
-            text: "Settings will show here.";
-        }
+        if root.section == Section.settings: SettingsPage { }
     }
 
     Toast { }
