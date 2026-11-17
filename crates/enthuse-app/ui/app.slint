@@ -505,10 +505,11 @@ component BrowserPage inherits Rectangle {
 // in `direction` (0 = north, then clockwise to 7 = north-west).
 component ResizeHandle inherits TouchArea {
     in property <int> direction;
-    callback start(int);
+    // Direction and the press point in window coordinates.
+    callback start(int, length, length);
     pointer-event(e) => {
         if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
-            root.start(root.direction);
+            root.start(root.direction, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
         }
     }
 }
@@ -518,13 +519,9 @@ component ResizeHandle inherits TouchArea {
 // resize, double-click or "Exit" to return.
 component PipOverlay inherits Rectangle {
 
-    callback start-move();
-    callback move-by(length, length);
-    // Move through the window system (needed on Wayland) instead of moving
-    // the window ourselves. The OS move blocks the event loop on Windows,
-    // which stalls the video, so it is only used where needed.
-    in property <bool> os-move: false;
-    callback start-resize(int);
+    // The press point in window coordinates is where the drag starts.
+    callback start-move(length, length);
+    callback start-resize(int, length, length);
     callback exit-pip();
 
     // Width of the resize strips along the edges, and size of the corners.
@@ -535,15 +532,8 @@ component PipOverlay inherits Rectangle {
 
     move-area := TouchArea {
         pointer-event(e) => {
-            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left && root.os-move) {
-                root.start-move();
-            }
-        }
-        // Our own move: the pointer stays at the same spot in the window, so
-        // its offset from the press point is how far to move.
-        moved => {
-            if (self.pressed && !root.os-move) {
-                root.move-by(self.mouse-x - self.pressed-x, self.mouse-y - self.pressed-y);
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                root.start-move(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
             }
         }
         double-clicked => { root.exit-pip(); }
@@ -552,31 +542,31 @@ component PipOverlay inherits Rectangle {
     // Edges first, then corners on top of them.
     ResizeHandle {
         x: root.corner; y: 0; width: root.width - 2 * root.corner; height: root.edge;
-        direction: 0; mouse-cursor: ns-resize; start(d) => { root.start-resize(d); }
+        direction: 0; mouse-cursor: ns-resize; start(d, x, y) => { root.start-resize(d, x, y); }
     }
     ResizeHandle {
         x: root.width - root.edge; y: root.corner; width: root.edge; height: root.height - 2 * root.corner;
-        direction: 2; mouse-cursor: ew-resize; start(d) => { root.start-resize(d); }
+        direction: 2; mouse-cursor: ew-resize; start(d, x, y) => { root.start-resize(d, x, y); }
     }
     ResizeHandle {
         x: root.corner; y: root.height - root.edge; width: root.width - 2 * root.corner; height: root.edge;
-        direction: 4; mouse-cursor: ns-resize; start(d) => { root.start-resize(d); }
+        direction: 4; mouse-cursor: ns-resize; start(d, x, y) => { root.start-resize(d, x, y); }
     }
     ResizeHandle {
         x: 0; y: root.corner; width: root.edge; height: root.height - 2 * root.corner;
-        direction: 6; mouse-cursor: ew-resize; start(d) => { root.start-resize(d); }
+        direction: 6; mouse-cursor: ew-resize; start(d, x, y) => { root.start-resize(d, x, y); }
     }
     ResizeHandle {
         x: root.width - root.corner; y: 0; width: root.corner; height: root.corner;
-        direction: 1; mouse-cursor: nesw-resize; start(d) => { root.start-resize(d); }
+        direction: 1; mouse-cursor: nesw-resize; start(d, x, y) => { root.start-resize(d, x, y); }
     }
     ResizeHandle {
         x: 0; y: root.height - root.corner; width: root.corner; height: root.corner;
-        direction: 5; mouse-cursor: nesw-resize; start(d) => { root.start-resize(d); }
+        direction: 5; mouse-cursor: nesw-resize; start(d, x, y) => { root.start-resize(d, x, y); }
     }
     ResizeHandle {
         x: 0; y: 0; width: root.corner; height: root.corner;
-        direction: 7; mouse-cursor: nwse-resize; start(d) => { root.start-resize(d); }
+        direction: 7; mouse-cursor: nwse-resize; start(d, x, y) => { root.start-resize(d, x, y); }
     }
 
     // Controls stay visible but fade back when the pointer is away, so the
@@ -629,7 +619,7 @@ component PipOverlay inherits Rectangle {
             mouse-cursor: nwse-resize;
             pointer-event(e) => {
                 if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
-                    root.start-resize(3);
+                    root.start-resize(3, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
                 }
             }
         }
@@ -680,10 +670,12 @@ export component AppWindow inherits Window {
     callback back();
     in property <bool> pip-active;
     callback toggle-pip();
-    in property <bool> pip-os-move;
-    callback pip-start-move();
-    callback pip-move-by(length, length);
-    callback pip-start-resize(int);
+    callback pip-start-move(length, length);
+    callback pip-start-resize(int, length, length);
+    // Display aspect ratio of the video (width / height), 0 if unknown.
+    in property <float> video-aspect;
+    callback video-aspect-changed();
+    changed video-aspect => { root.video-aspect-changed(); }
     // Rust-side plumbing: invoked on the UI thread when player events wait.
     callback player-events-pending();
 
@@ -753,10 +745,8 @@ export component AppWindow inherits Window {
         }
 
         if root.page == 1 && root.pip-active: PipOverlay {
-            os-move: root.pip-os-move;
-            start-move => { root.pip-start-move(); }
-            move-by(dx, dy) => { root.pip-move-by(dx, dy); }
-            start-resize(d) => { root.pip-start-resize(d); }
+            start-move(x, y) => { root.pip-start-move(x, y); }
+            start-resize(d, x, y) => { root.pip-start-resize(d, x, y); }
             exit-pip => { root.toggle-pip(); }
         }
     }

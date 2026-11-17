@@ -8,7 +8,9 @@ mod bg;
 mod browser;
 mod nav;
 mod pip;
+mod pip_geometry;
 mod playback;
+mod pointer;
 mod selftest;
 mod video;
 
