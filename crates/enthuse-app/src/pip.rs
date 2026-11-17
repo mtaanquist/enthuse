@@ -8,7 +8,10 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
+
+use enthuse_player::Player;
 
 use slint::winit_030::WinitWindowAccessor;
 use slint::winit_030::winit::window::ResizeDirection;
@@ -23,13 +26,15 @@ use crate::{AppWindow, BrowserModel, BrowserWindow, KeyFocus};
 
 /// PiP size when entering, in logical pixels; the video's ratio is fitted
 /// into it.
-const PIP_SIZE: (f32, f32) = (480.0, 270.0);
+const PIP_SIZE: (f32, f32) = (560.0, 315.0);
 /// Smallest PiP size, in logical pixels. Keep in step with app.slint.
 const PIP_MIN: (f32, f32) = (192.0, 108.0);
 /// Gap between the PiP window and the screen edges, in logical pixels.
-const PIP_MARGIN: f32 = 24.0;
+const PIP_MARGIN: f32 = 48.0;
 /// How often a move or resize follows the pointer.
 const DRAG_TICK: Duration = Duration::from_millis(8);
+/// Subtitle scale in PiP, so they stay readable in the small window.
+const PIP_SUB_SCALE: &str = "1.7";
 
 /// A window's geometry, to hand over between the main and browser windows.
 #[derive(Clone, Copy)]
@@ -45,6 +50,7 @@ pub struct Pip {
     /// Shows the browser while the main window is the PiP player.
     side: BrowserWindow,
     browser: Rc<Browser>,
+    player: Arc<dyn Player>,
     /// Set while PiP is on.
     saved: Cell<Option<Saved>>,
     /// Follows the pointer during a move or resize we do ourselves.
@@ -52,7 +58,11 @@ pub struct Pip {
 }
 
 impl Pip {
-    pub fn new(main: &AppWindow, browser: Rc<Browser>) -> Result<Rc<Self>, slint::PlatformError> {
+    pub fn new(
+        main: &AppWindow,
+        browser: Rc<Browser>,
+        player: Arc<dyn Player>,
+    ) -> Result<Rc<Self>, slint::PlatformError> {
         let side = BrowserWindow::new()?;
         {
             let weak = side.as_weak();
@@ -72,6 +82,7 @@ impl Pip {
             main: main.as_weak(),
             side,
             browser,
+            player,
             saved: Cell::new(None),
             drag: RefCell::new(None),
         });
@@ -172,6 +183,9 @@ impl Pip {
             window.set_maximized(false);
         }
         m.set_pip_active(true);
+        let _ = self.player.set_option("sub-scale", PIP_SUB_SCALE);
+        #[cfg(target_os = "windows")]
+        win32::set_rounded(&m, true);
 
         let scale = window.scale_factor();
         let mut rect = Rect {
@@ -225,6 +239,9 @@ impl Pip {
         m.global::<BrowserModel>()
             .set_view_mode(self.side.global::<BrowserModel>().get_view_mode());
         m.set_pip_active(false);
+        let _ = self.player.set_option("sub-scale", "1");
+        #[cfg(target_os = "windows")]
+        win32::set_rounded(&m, false);
         window.set_size(target.size);
         window.set_position(target.position);
         if target.maximized {
@@ -447,6 +464,9 @@ mod win32 {
     use slint::ComponentHandle;
     use slint::winit_030::WinitWindowAccessor;
     use slint::winit_030::winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows_sys::Win32::Graphics::Dwm::{
+        DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DEFAULT, DWMWCP_ROUND, DwmSetWindowAttribute,
+    };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOZORDER, SetWindowPos,
     };
@@ -481,5 +501,33 @@ mod win32 {
                 }
             })
             .unwrap_or(false)
+    }
+
+    /// Rounds the window's corners (Windows 11), or gives back the
+    /// default. Older Windows ignores it and keeps square corners.
+    pub fn set_rounded(window: &AppWindow, rounded: bool) {
+        window.window().with_winit_window(|ww| {
+            let Ok(handle) = ww.window_handle() else {
+                return;
+            };
+            let RawWindowHandle::Win32(h) = handle.as_raw() else {
+                return;
+            };
+            let preference = if rounded {
+                DWMWCP_ROUND
+            } else {
+                DWMWCP_DEFAULT
+            };
+            // SAFETY: the handle belongs to our live window, and the
+            // attribute value is a 4-byte DWM_WINDOW_CORNER_PREFERENCE.
+            unsafe {
+                DwmSetWindowAttribute(
+                    h.hwnd.get() as _,
+                    DWMWA_WINDOW_CORNER_PREFERENCE as _,
+                    (&raw const preference).cast(),
+                    std::mem::size_of_val(&preference) as u32,
+                );
+            }
+        });
     }
 }

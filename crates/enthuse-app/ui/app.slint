@@ -1,5 +1,4 @@
 // Enthuse main window: the app screens (sidebar shell) and the player.
-// The player still has the prototype layout until #65.
 
 import { Theme, Icons, KeyFocus } from "theme.slint";
 
@@ -22,42 +21,47 @@ export { Section }
 
 
 
-// Geometry of the now-playing bar in the browser window (#67 restyles it).
+// Geometry of the now-playing bar in the browser window.
 export global Layout {
-    out property <length> bar-height: 96px;
-    out property <length> button-size: Theme.transport-button-size;
-    out property <length> gutter: Theme.space-16;
+    out property <length> bar-height: 72px;
+    out property <length> gutter: Theme.space-24;
 }
 
-// Seek bar: tap or drag anywhere to seek. Large hit area for touch.
-component SeekBar inherits Rectangle {
+// Thin progress line along the top of the now-playing bar. Tap or drag to
+// seek; the hit area is taller than the line, and the thumb shows on hover.
+component ProgressLine inherits Rectangle {
     in property <float> position;
     in property <float> duration;
     callback seek(float);
 
-    height: 40px;
+    height: 16px;
+    accessible-role: slider;
+    accessible-label: "Position";
+    accessible-value: root.position;
+    accessible-value-minimum: 0;
+    accessible-value-maximum: root.duration;
 
-    property <float> fraction: duration > 0 ? clamp(position / duration, 0, 1) : 0;
+    property <float> fraction: root.duration > 0 ? clamp(root.position / root.duration, 0, 1) : 0;
+    property <bool> active: touch.has-hover || touch.pressed;
 
-    track := Rectangle {
-        y: (parent.height - self.height) / 2;
-        height: 4px;
-        border-radius: 2px;
+    Rectangle {
+        y: 0;
+        height: root.active ? 4px : 3px;
         background: Theme.track;
 
         Rectangle {
             x: 0;
             width: parent.width * root.fraction;
-            border-radius: 2px;
             background: Theme.accent;
         }
     }
 
-    Rectangle {
-        x: track.width * root.fraction - self.width / 2;
-        width: 16px;
-        height: 16px;
-        border-radius: 8px;
+    if root.active: Rectangle {
+        x: root.width * root.fraction - self.width / 2;
+        y: 2px - self.height / 2;
+        width: 12px;
+        height: 12px;
+        border-radius: 6px;
         background: Theme.on-video;
     }
 
@@ -80,11 +84,8 @@ component SeekBar inherits Rectangle {
     }
 }
 
-
-// Invisible strip along the PiP window's edge or corner that starts an OS resize
-// in `direction` (0 = north, then clockwise to 7 = north-west).
 // Playback controls for the browser window, so the PiP video can be
-// controlled while browsing for something else.
+// controlled while browsing for something else (docs/ui.md, "PiP").
 component NowPlayingBar inherits Rectangle {
     in property <bool> paused;
     in property <float> position;
@@ -99,7 +100,10 @@ component NowPlayingBar inherits Rectangle {
     callback show-video();
     callback stop();
 
-    height: Layout.bar-height + 28px;
+    // Below this width the seek buttons go and the pill loses its text.
+    property <bool> narrow: root.width < 640px;
+
+    height: Layout.bar-height;
     background: Theme.sidebar;
 
     Rectangle {
@@ -108,87 +112,90 @@ component NowPlayingBar inherits Rectangle {
         background: Theme.line;
     }
 
-    Text {
-        x: Layout.gutter;
-        y: 10px;
-        width: time.x - self.x - Layout.gutter;
-        height: 20px;
-        text: root.message != "" ? root.message : root.title;
-        color: root.message != "" ? Theme.danger : Theme.text;
-        font-size: Theme.body-size;
-        font-weight: 600;
-        overflow: elide;
-        vertical-alignment: center;
-    }
+    HorizontalLayout {
+        padding-left: Layout.gutter;
+        padding-right: Layout.gutter;
+        padding-top: Theme.space-4;
+        spacing: Theme.space-8;
+        alignment: stretch;
 
-    time := Text {
-        x: parent.width - self.width - Layout.gutter;
-        y: 10px;
-        width: 130px;
-        height: 20px;
-        text: root.position-text + " / " + root.duration-text;
-        color: Theme.text-muted;
-        font-size: Theme.meta-size;
-        horizontal-alignment: right;
-        vertical-alignment: center;
-    }
-
-    controls := Rectangle {
-        y: 28px;
-        height: Layout.bar-height;
-
-        back10 := IconButton {
-            x: Layout.gutter;
+        if !root.narrow: IconButton {
             y: (parent.height - self.height) / 2;
             icon: Icons.back-10;
             label: "Back 10 seconds";
             clicked => { root.seek-relative(-10); }
         }
 
-        play := IconButton {
-            x: back10.x + back10.width + Layout.gutter / 2;
+        IconButton {
             y: (parent.height - self.height) / 2;
-            variant: ButtonVariant.primary;
+            variant: ButtonVariant.light;
             icon: root.paused ? Icons.play : Icons.pause;
             label: root.paused ? "Play" : "Pause";
             clicked => { root.toggle-pause(); }
         }
 
-        fwd10 := IconButton {
-            x: play.x + play.width + Layout.gutter / 2;
+        if !root.narrow: IconButton {
             y: (parent.height - self.height) / 2;
             icon: Icons.forward-30;
             label: "Forward 30 seconds";
             clicked => { root.seek-relative(30); }
         }
 
-        stop := IconButton {
-            x: parent.width - self.width - Layout.gutter;
-            y: (parent.height - self.height) / 2;
-            icon: Icons.close;
-            label: "Stop";
-            clicked => { root.stop(); }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            padding-left: Theme.space-8;
+            spacing: 2px;
+
+            Text {
+                text: root.message != "" ? root.message : root.title;
+                color: root.message != "" ? Theme.danger : Theme.text;
+                font-size: Theme.body-size;
+                font-weight: Theme.body-strong-weight;
+                overflow: elide;
+            }
+
+            Text {
+                text: root.position-text + " / " + root.duration-text;
+                color: Theme.text-muted;
+                font-size: Theme.meta-size;
+                overflow: elide;
+            }
         }
 
-        video := PillButton {
-            x: stop.x - self.width - Layout.gutter / 2;
+        if !root.narrow: PillButton {
             y: (parent.height - self.height) / 2;
+            horizontal-stretch: 0;
             icon: Icons.pip-exit;
             text: "Back to video";
             clicked => { root.show-video(); }
         }
 
-        SeekBar {
-            x: fwd10.x + fwd10.width + Layout.gutter;
-            width: max(0px, video.x - self.x - Layout.gutter);
+        if root.narrow: IconButton {
             y: (parent.height - self.height) / 2;
-            position: root.position;
-            duration: root.duration;
-            seek(t) => { root.seek(t); }
+            icon: Icons.pip-exit;
+            label: "Back to video";
+            clicked => { root.show-video(); }
         }
+
+        IconButton {
+            y: (parent.height - self.height) / 2;
+            icon: Icons.close;
+            label: "Stop";
+            clicked => { root.stop(); }
+        }
+    }
+
+    ProgressLine {
+        y: 0;
+        position: root.position;
+        duration: root.duration;
+        seek(t) => { root.seek(t); }
     }
 }
 
+// Invisible strip along the PiP window's edge or corner that starts an OS resize
+// in `direction` (0 = north, then clockwise to 7 = north-west).
 component ResizeHandle inherits TouchArea {
     in property <int> direction;
     // Direction and the press point in window coordinates.
@@ -204,25 +211,53 @@ component ResizeHandle inherits TouchArea {
 // is the PiP mini player. Drag anywhere to move, drag an edge or corner to
 // resize, double-click or "Exit" to return.
 component PipOverlay inherits Rectangle {
+    in property <bool> paused;
+    in property <float> position;
+    in property <float> duration;
 
     // The press point in window coordinates is where the drag starts.
     callback start-move(length, length);
     callback start-resize(int, length, length);
     callback exit-pip();
+    callback close();
+    callback toggle-pause();
+    callback seek-relative(float);
 
     // Width of the resize strips along the edges, and size of the corners.
     property <length> edge: 8px;
     property <length> corner: 20px;
 
-    property <bool> hover: move-area.has-hover || exit.has-hover || grip-touch.has-hover;
+    // A tap (touch has no hover) shows the controls for a while.
+    property <bool> tapped;
+    property <bool> hover: move-area.has-hover || exit.has-hover || close.has-hover || back10.has-hover || play.has-hover || fwd30.has-hover || grip-touch.has-hover;
+    property <bool> show: root.hover || root.tapped || root.paused;
+    // Below this height the seek buttons go, so play still fits.
+    property <bool> small: root.height < 150px || root.width < 260px;
+
+    Timer {
+        interval: 3s;
+        running: root.tapped;
+        triggered => { root.tapped = false; }
+    }
 
     move-area := TouchArea {
         pointer-event(e) => {
             if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                root.tapped = true;
                 root.start-move(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
             }
         }
         double-clicked => { root.exit-pip(); }
+    }
+
+    // Scrim and controls (docs/ui.md, PipControls).
+    Rectangle {
+        background: rgba(0, 0, 0, 0.42);
+        opacity: root.show ? 1 : 0;
+
+        animate opacity {
+            duration: 150ms;
+        }
     }
 
     // Edges first, then corners on top of them.
@@ -255,17 +290,85 @@ component PipOverlay inherits Rectangle {
         direction: 7; mouse-cursor: nwse-resize; start(d, x, y) => { root.start-resize(d, x, y); }
     }
 
-    // Controls stay visible but fade back when the pointer is away, so the
-    // window stays usable on touch screens.
+    // The buttons only take input while shown; a tap elsewhere shows them.
     exit := IconButton {
-        x: parent.width - self.width - Theme.space-8;
-        y: Theme.space-8;
+        x: Theme.space-12;
+        y: Theme.space-12;
         size: Theme.touch-target;
         variant: ButtonVariant.overlay;
         icon: Icons.pip-exit;
         label: "Back to full window";
-        opacity: root.hover ? 1.0 : 0.5;
+        opacity: root.show ? 1 : 0;
+        visible: self.opacity > 0;
         clicked => { root.exit-pip(); }
+
+        animate opacity {
+            duration: 150ms;
+        }
+    }
+
+    close := IconButton {
+        x: parent.width - self.width - Theme.space-12;
+        y: Theme.space-12;
+        size: Theme.touch-target;
+        variant: ButtonVariant.overlay;
+        icon: Icons.close;
+        label: "Stop and close";
+        opacity: root.show ? 1 : 0;
+        visible: self.opacity > 0;
+        clicked => { root.close(); }
+
+        animate opacity {
+            duration: 150ms;
+        }
+    }
+
+    play := IconButton {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        size: Theme.pip-play-size;
+        variant: ButtonVariant.light;
+        icon: root.paused ? Icons.play : Icons.pause;
+        label: root.paused ? "Play" : "Pause";
+        opacity: root.show ? 1 : 0;
+        visible: self.opacity > 0;
+        clicked => { root.toggle-pause(); }
+
+        animate opacity {
+            duration: 150ms;
+        }
+    }
+
+    back10 := IconButton {
+        x: play.x - self.width - Theme.space-20;
+        y: (parent.height - self.height) / 2;
+        size: Theme.touch-target;
+        variant: ButtonVariant.overlay;
+        icon: Icons.back-10;
+        label: "Back 10 seconds";
+        opacity: root.show && !root.small ? 1 : 0;
+        visible: self.opacity > 0;
+        clicked => { root.seek-relative(-10); }
+
+        animate opacity {
+            duration: 150ms;
+        }
+    }
+
+    fwd30 := IconButton {
+        x: play.x + play.width + Theme.space-20;
+        y: (parent.height - self.height) / 2;
+        size: Theme.touch-target;
+        variant: ButtonVariant.overlay;
+        icon: Icons.forward-30;
+        label: "Forward 30 seconds";
+        opacity: root.show && !root.small ? 1 : 0;
+        visible: self.opacity > 0;
+        clicked => { root.seek-relative(30); }
+
+        animate opacity {
+            duration: 150ms;
+        }
     }
 
     grip := Rectangle {
@@ -273,22 +376,22 @@ component PipOverlay inherits Rectangle {
         y: parent.height - self.height;
         width: 32px;
         height: 32px;
-        opacity: root.hover ? 1.0 : 0.5;
+        opacity: root.show ? 1.0 : 0.4;
 
         // Our own corner mark: two short bars.
         Rectangle {
-            x: 10px;
+            x: 12px;
             y: 22px;
-            width: 16px;
-            height: 3px;
-            background: Theme.text;
+            width: 12px;
+            height: 2px;
+            background: Theme.on-video;
         }
         Rectangle {
-            x: 23px;
-            y: 9px;
-            width: 3px;
-            height: 16px;
-            background: Theme.text;
+            x: 22px;
+            y: 12px;
+            width: 2px;
+            height: 12px;
+            background: Theme.on-video;
         }
 
         grip-touch := TouchArea {
@@ -298,6 +401,19 @@ component PipOverlay inherits Rectangle {
                     root.start-resize(3, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
                 }
             }
+        }
+    }
+
+    // Progress along the bottom edge, always visible.
+    Rectangle {
+        y: parent.height - self.height;
+        height: 4px;
+        background: Theme.track;
+
+        Rectangle {
+            x: 0;
+            width: parent.width * (root.duration > 0 ? clamp(root.position / root.duration, 0, 1) : 0);
+            background: Theme.accent;
         }
     }
 }
@@ -366,7 +482,8 @@ component AppScreens inherits Rectangle {
 }
 
 export component AppWindow inherits Window {
-    title: root.page == 1 && root.video-title != "" ? root.video-title + " - Enthuse" : "Enthuse";
+    // A fixed title in PiP, so a window manager rule can match it (README).
+    title: root.pip-active ? "Enthuse PiP" : root.page == 1 && root.video-title != "" ? root.video-title + " - Enthuse" : "Enthuse";
     preferred-width: 1120px;
     preferred-height: 720px;
     // PiP turns this window into a small borderless player on top, so the
@@ -492,9 +609,15 @@ export component AppWindow inherits Window {
         }
 
         if root.page == 1 && root.pip-active: PipOverlay {
+            paused: root.paused;
+            position: root.position;
+            duration: root.duration;
             start-move(x, y) => { root.pip-start-move(x, y); }
             start-resize(d, x, y) => { root.pip-start-resize(d, x, y); }
             exit-pip => { root.toggle-pip(); }
+            close => { root.back(); }
+            toggle-pause => { root.toggle-pause(); }
+            seek-relative(d) => { root.seek-relative(d); }
         }
     }
 }
