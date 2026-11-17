@@ -8,6 +8,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use enthuse_core::resume::{Marker, marker};
+use enthuse_core::settings::cycle;
 use enthuse_core::source::{Entry, EntryKind, LocalFs, Source, SourceError, SourcePath};
 use enthuse_core::storage::{SourceId, Store};
 use enthuse_core::time::format_time;
@@ -77,6 +78,8 @@ impl Browser {
         window.on_browser_up(move || b.up());
         let b = this.clone();
         window.on_browser_remove(move |i| b.remove_source(i as usize));
+        let b = this.clone();
+        window.on_browser_cycle_resume(move || b.cycle_resume());
         let b = this.clone();
         window.on_add_source(move |path| {
             if let Some(index) = b.add_local(path.trim()) {
@@ -227,6 +230,7 @@ impl Browser {
             return;
         };
         w.set_browser_error(SharedString::new());
+        self.update_resume_label();
 
         match location {
             Location::Sources => {
@@ -304,6 +308,10 @@ impl Browser {
         };
         // Markers are a nice-to-have: show the listing even if this fails.
         let states = self.store.folder_states(source, folder).unwrap_or_default();
+        let resume = self
+            .store
+            .playback_settings(source, folder)
+            .map_or(true, |s| s.resume);
         let items: Vec<_> = entries
             .iter()
             .map(|e| {
@@ -324,7 +332,11 @@ impl Browser {
                         }
                         Marker::InProgress { position, fraction } => {
                             item.progress = fraction.unwrap_or(0.0) as f32;
-                            item.detail = format!("Resume at {}", format_time(position)).into();
+                            item.detail = if resume {
+                                format!("Resume at {}", format_time(position)).into()
+                            } else {
+                                "In progress".into()
+                            };
                         }
                     }
                 }
@@ -333,6 +345,66 @@ impl Browser {
             .collect();
         *self.entries.borrow_mut() = entries;
         w.set_browser_items(ModelRc::new(VecModel::from(items)));
+    }
+
+    /// Steps the resume setting of the current folder (inherit, off, on), or
+    /// toggles the default on the source list.
+    fn cycle_resume(self: &Rc<Self>) {
+        let location = self.location.borrow().clone();
+        let result = match &location {
+            Location::Sources => self
+                .store
+                .default_playback_settings()
+                .and_then(|s| self.store.set_default_resume(!s.resume)),
+            Location::Folder { source, path } => {
+                let Some(id) = self.sources.borrow().get(*source).map(|s| s.source.id) else {
+                    return;
+                };
+                self.store.folder_overrides(id).and_then(|o| {
+                    let own = o.get(path).and_then(|o| o.resume);
+                    self.store.set_folder_resume(id, path, cycle(own))
+                })
+            }
+        };
+        if let Err(err) = result {
+            self.show_error(&format!("Cannot save this setting: {err}"));
+        }
+        self.update_resume_label();
+        // "Resume at" markers depend on the setting.
+        if matches!(location, Location::Folder { .. }) {
+            self.refresh();
+        }
+    }
+
+    fn update_resume_label(&self) {
+        let Some(w) = self.window.upgrade() else {
+            return;
+        };
+        let on_off = |on: bool| if on { "On" } else { "Off" };
+        let label = match &*self.location.borrow() {
+            Location::Sources => {
+                let s = self.store.default_playback_settings().unwrap_or_default();
+                format!("Resume: {}", on_off(s.resume))
+            }
+            Location::Folder { source, path } => {
+                let Some(id) = self.sources.borrow().get(*source).map(|s| s.source.id) else {
+                    return;
+                };
+                let own = self
+                    .store
+                    .folder_overrides(id)
+                    .ok()
+                    .and_then(|o| o.get(path).and_then(|o| o.resume));
+                match own {
+                    Some(on) => format!("Resume: {}", on_off(on)),
+                    None => {
+                        let resolved = self.store.playback_settings(id, path).unwrap_or_default();
+                        format!("Resume: {} (inherited)", on_off(resolved.resume))
+                    }
+                }
+            }
+        };
+        w.set_browser_resume_label(label.into());
     }
 
     fn show_error(&self, message: &str) {

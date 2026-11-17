@@ -95,7 +95,16 @@ impl Nav {
                     .store
                     .watched_threshold()
                     .unwrap_or(DEFAULT_WATCHED_THRESHOLD);
-                let start = start_position(state.as_ref(), threshold);
+                let folder = path.parent().unwrap_or_else(SourcePath::root);
+                let resume = self
+                    .store
+                    .playback_settings(source.id, &folder)
+                    .map_or(true, |s| s.resume);
+                let start = if resume {
+                    start_position(state.as_ref(), threshold)
+                } else {
+                    None
+                };
                 self.playback.open(&url, path.name().unwrap_or(&url), start);
                 *self.current.borrow_mut() = Some(Current {
                     source,

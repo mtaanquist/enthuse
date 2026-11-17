@@ -64,6 +64,28 @@ component IconButton inherits Rectangle {
     }
 }
 
+// Like IconButton, but sized to its text, for settings such as "Resume: On".
+component PillButton inherits Rectangle {
+    in property <string> label;
+    callback clicked();
+
+    width: label-text.preferred-width + 2 * Layout.gutter;
+    height: Layout.button-size;
+    border-radius: self.height / 2;
+    background: touch.pressed ? #ffffff40 : #ffffff20;
+
+    label-text := Text {
+        text: root.label;
+        color: Palette.text;
+        font-size: 15px;
+        font-weight: 600;
+    }
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
 // Seek bar: tap or drag anywhere to seek. Large hit area for touch.
 component SeekBar inherits Rectangle {
     in property <float> position;
@@ -362,10 +384,13 @@ component BrowserPage inherits Rectangle {
     in property <[BrowserItem]> items;
     in property <bool> loading;
     in property <string> error;
+    // Resume setting for this folder (or the default, on the source list).
+    in property <string> resume-label;
     callback up();
     callback activate(int);
     callback remove(int);
     callback add-source(string);
+    callback cycle-resume();
 
     property <bool> adding;
     changed adding => {
@@ -390,13 +415,20 @@ component BrowserPage inherits Rectangle {
 
         Text {
             x: root.can-go-up ? Layout.gutter * 2 + Layout.button-size : Layout.gutter;
-            width: add.x - self.x - Layout.gutter;
+            width: resume.x - self.x - Layout.gutter;
             text: root.heading;
             color: Palette.text;
             font-size: 20px;
             font-weight: 600;
             overflow: elide;
             vertical-alignment: center;
+        }
+
+        resume := PillButton {
+            x: add.x - self.width - Layout.gutter;
+            y: Layout.gutter;
+            label: root.resume-label;
+            clicked => { root.cycle-resume(); }
         }
 
         add := IconButton {
@@ -494,6 +526,8 @@ export component AppWindow inherits Window {
     in property <[BrowserItem]> browser-items;
     in property <bool> browser-loading;
     in property <string> browser-error;
+    in property <string> browser-resume-label;
+    callback browser-cycle-resume();
     callback browser-up();
     callback browser-activate(int);
     callback browser-remove(int);
@@ -554,6 +588,8 @@ export component AppWindow inherits Window {
             items: root.browser-items;
             loading: root.browser-loading;
             error: root.browser-error;
+            resume-label: root.browser-resume-label;
+            cycle-resume => { root.browser-cycle-resume(); }
             up => { root.browser-up(); }
             activate(i) => { root.browser-activate(i); }
             remove(i) => { root.browser-remove(i); }

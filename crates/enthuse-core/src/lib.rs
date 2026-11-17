@@ -8,6 +8,7 @@ pub mod natsort;
 pub mod next;
 pub mod paths;
 pub mod resume;
+pub mod settings;
 pub mod source;
 pub mod storage;
 pub mod time;
