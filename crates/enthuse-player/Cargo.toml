@@ -10,3 +10,5 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+libmpv2.workspace = true
+libmpv2-sys.workspace = true

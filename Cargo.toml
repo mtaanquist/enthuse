@@ -13,6 +13,8 @@ repository = "https://github.com/mtaanquist/enthuse"
 enthuse-core = { path = "crates/enthuse-core" }
 enthuse-player = { path = "crates/enthuse-player" }
 directories = "6"
+libmpv2 = "7.0.1"
+libmpv2-sys = "4.0.1"
 rusqlite = { version = "0.41", features = ["bundled"] }
 rusqlite_migration = "2.7"
 
