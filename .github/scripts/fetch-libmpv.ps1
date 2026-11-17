@@ -54,7 +54,8 @@ if (-not (Test-Path (Join-Path $Dest "mpv.lib"))) {
 
     $def = Join-Path $Dest "mpv.def"
     Set-Content -Path $def -Value (@("LIBRARY $($dll.Name)", "EXPORTS") + $names)
-    & (Join-Path $bin "lib.exe") /nologo /def:$def /out:(Join-Path $Dest "mpv.lib") /machine:x64
+    $implib = Join-Path $Dest "mpv.lib"
+    & (Join-Path $bin "lib.exe") /nologo "/def:$def" "/out:$implib" /machine:x64
     if ($LASTEXITCODE -ne 0) { throw "lib.exe failed" }
 } else {
     Write-Host "Using cached libmpv in $Dest"
