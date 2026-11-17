@@ -22,6 +22,8 @@ pub struct Settings {
     browser: Rc<Browser>,
     /// The folders listed under "Folder settings", in order.
     overrides: RefCell<Vec<(SourceId, SourcePath)>>,
+    /// Called after every saved change.
+    listeners: RefCell<Vec<Box<dyn Fn()>>>,
 }
 
 /// Connects a window's Settings callbacks to `$settings`.
@@ -62,6 +64,7 @@ impl Settings {
             store,
             browser,
             overrides: Default::default(),
+            listeners: Default::default(),
         });
         wire_callbacks!(window, this);
         this.refresh();
@@ -73,6 +76,11 @@ impl Settings {
         wire_callbacks!(window, self);
         *self.side.borrow_mut() = Some(window.as_weak());
         self.refresh();
+    }
+
+    /// Calls `f` after each change, e.g. so playback picks it up.
+    pub fn on_change(&self, f: impl Fn() + 'static) {
+        self.listeners.borrow_mut().push(Box::new(f));
     }
 
     /// Runs `f` with the Settings model of each open window.
@@ -94,10 +102,21 @@ impl Settings {
         }
         self.refresh();
         self.browser.settings_changed();
+        for f in self.listeners.borrow().iter() {
+            f();
+        }
     }
 
     fn change_rule(&self, f: impl FnOnce(&mut WatchedRule)) {
-        let mut rule = self.store.watched_rule().unwrap_or_default();
+        // Never save defaults over a rule that could not be read.
+        let mut rule = match self.store.watched_rule() {
+            Ok(rule) => rule,
+            Err(err) => {
+                self.browser
+                    .show_error(&format!("Cannot read this setting: {err}"));
+                return;
+            }
+        };
         f(&mut rule);
         self.save(|store| store.set_watched_rule(&rule));
     }

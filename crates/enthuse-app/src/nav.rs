@@ -46,6 +46,9 @@ pub struct Nav {
     /// slow next-file lookup does not override what happened meanwhile.
     generation: Cell<u64>,
     thumbs: RefCell<Option<Rc<Thumbs>>>,
+    /// The auto-next setting, kept here so position updates (one per
+    /// frame) don't read the database. See [`Nav::reload_settings`].
+    auto_next: Cell<bool>,
 }
 
 impl Nav {
@@ -67,7 +70,9 @@ impl Nav {
             on_leave_player: RefCell::new(None),
             generation: Cell::new(0),
             thumbs: RefCell::new(None),
+            auto_next: Cell::new(true),
         });
+        this.reload_settings();
 
         let weak = Rc::downgrade(&this);
         this.playback.set_listener(Box::new(move |event| {
@@ -341,7 +346,12 @@ impl Nav {
     }
 
     fn auto_next(&self) -> bool {
-        self.store.auto_next().unwrap_or(true)
+        self.auto_next.get()
+    }
+
+    /// Picks up changed settings, e.g. auto-next turned off in Settings.
+    pub fn reload_settings(&self) {
+        self.auto_next.set(self.store.auto_next().unwrap_or(true));
     }
 
     /// The current file played to its end: mark it watched and go on to the

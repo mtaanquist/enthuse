@@ -110,6 +110,8 @@ export component PillButton inherits Rectangle {
     in property <ButtonVariant> variant: ButtonVariant.outline;
     in property <bool> enabled: true;
     in property <length> size: Theme.touch-target;
+    // Accessible name when the text alone is not enough, e.g. "Clear" in a list.
+    in property <string> accessible-name;
     callback clicked();
 
     // Sized to its content, also when placed outside a layout.
@@ -122,7 +124,7 @@ export component PillButton inherits Rectangle {
     opacity: root.enabled ? 1 : Theme.disabled-opacity;
     forward-focus: behavior;
     accessible-role: button;
-    accessible-label: root.text;
+    accessible-label: root.accessible-name != "" ? root.accessible-name : root.text;
     accessible-enabled: root.enabled;
     accessible-action-default => {
         if (root.enabled) {

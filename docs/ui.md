@@ -120,7 +120,7 @@ The grid view shows the same items as 16:9 cards with the same badges.
 Video fills the window (drawn by libmpv under the Slint UI). Overlay, shown on mouse move or tap and hidden after 3 s without input while playing:
 1. Top: back to folder, title and episode line, PiP button.
 2. Bottom: Scrubber, then TransportBar.
-3. UpNextCard when the file is within its last 20 s, a next file exists in the folder and auto-next is on (Settings). Counts down 10 s of playback (it pauses with the video), then marks the file watched and plays the next one. Cancel hides it for this file, and playback then stops at the end instead of going on. Seeking back out of the last 20 s hides it and restarts the countdown next time. Files of 20 s or less get no card. In PiP there is no card; the next file starts at the end as before.
+3. UpNextCard when the file is within its last 20 s, a next file exists in the folder and auto-next is on (Settings). Counts down 10 s of playback (it pauses with the video), then marks the file watched and plays the next one. Cancel hides it for this file, and playback then stops at the end instead of going on. Seeking back out of the last 20 s hides it and restarts the countdown next time. Files of 20 s or less get no card. In PiP there is no card; the next file starts at the end as before, if auto-next is on.
 
 Subtitles are rendered by mpv inside the video frame. The UI never draws them, and the overlay must not cover the bottom subtitle area when it can be avoided.
 

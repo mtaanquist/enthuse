@@ -358,6 +358,8 @@ impl Store {
     }
 
     pub fn set_watched_rule(&self, rule: &WatchedRule) -> Result<()> {
+        // All three keys or none.
+        let tx = self.conn.unchecked_transaction()?;
         self.set_setting(KEY_WATCHED_MODE, rule.mode.as_str())?;
         self.set_setting(
             KEY_WATCHED_THRESHOLD,
@@ -368,7 +370,9 @@ impl Store {
         } else {
             0.0
         };
-        self.set_setting(KEY_WATCHED_REMAINING, &remaining.to_string())
+        self.set_setting(KEY_WATCHED_REMAINING, &remaining.to_string())?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// Whether the next file in the folder starts when one ends. On unless

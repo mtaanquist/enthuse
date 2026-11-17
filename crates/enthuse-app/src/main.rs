@@ -117,6 +117,10 @@ fn run(
     );
     home.set_nav(&nav);
     let settings = settings::Settings::new(&window, store.clone(), browser.clone());
+    {
+        let nav = nav.clone();
+        settings.on_change(move || nav.reload_settings());
+    }
     // No thumbnails in the self-test, which has no real files and must not
     // write to the user's cache.
     let thumb_dir = (!self_test)

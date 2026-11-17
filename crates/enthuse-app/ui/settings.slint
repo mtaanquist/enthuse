@@ -146,8 +146,16 @@ component SwitchRow inherits Rectangle {
         }
     }
 
+    // Keyboard focus, drawn inside the row: the card clips anything outside.
+    if behavior.keyboard-focus: Rectangle {
+        border-width: Theme.focus-ring-width;
+        border-color: Theme.accent;
+        border-radius: Theme.radius-small;
+    }
+
     behavior := ButtonBehavior {
         ring-radius: 0;
+        show-ring: false;
         clicked => { root.toggled(!root.on); }
     }
 }
@@ -158,7 +166,8 @@ component TextSegments inherits Rectangle {
     in property <int> selected;
     callback select(int);
 
-    height: Theme.touch-target;
+    // Each segment is a full touch target inside the 3px padding.
+    height: Theme.touch-target + 6px;
     border-radius: self.height / 2;
     border-width: 1px;
     border-color: Theme.line;
@@ -357,7 +366,7 @@ export component SettingsPage inherits Rectangle {
 
                         RowText {
                             title: "Mark as watched";
-                            description: SettingsModel.watched-summary + ". Playing to the end always counts.";
+                            description: SettingsModel.watched-summary + (SettingsModel.watched-mode != 0 ? ". Time left waits until at most a quarter of the file is left" : "") + ". Playing to the end always counts.";
                         }
                     }
 
@@ -425,6 +434,7 @@ export component SettingsPage inherits Rectangle {
 
                             PillButton {
                                 text: "Clear";
+                                accessible-name: "Clear settings for " + item.folder;
                                 clicked => { SettingsModel.clear-override(index); }
                             }
                         }
