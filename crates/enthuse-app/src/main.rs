@@ -4,7 +4,9 @@
 //! file or URL starts playing right away. `--self-test` plays a built-in test
 //! pattern and checks a snapshot of the window, for CI.
 
+mod bg;
 mod browser;
+mod nav;
 mod playback;
 mod selftest;
 mod video;
@@ -16,9 +18,6 @@ use std::sync::Arc;
 use enthuse_player::{MpvPlayer, Player};
 
 slint::include_modules!();
-
-const PAGE_BROWSER: i32 = 0;
-const PAGE_PLAYER: i32 = 1;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -80,29 +79,10 @@ fn run(
         browser.add_local(folder);
     }
 
+    let nav = nav::Nav::new(&window, player.clone(), playback.clone());
     {
-        let playback = playback.clone();
-        let weak = window.as_weak();
-        browser.set_play_handler(Box::new(move |source, path| {
-            let Some(w) = weak.upgrade() else { return };
-            match source.playable(&path) {
-                Ok(url) => {
-                    playback.open(&url, path.name().unwrap_or(&url), None);
-                    w.set_page(PAGE_PLAYER);
-                }
-                Err(err) => w.set_browser_error(format!("Cannot play this file: {err}").into()),
-            }
-        }));
-    }
-    {
-        let player = player.clone();
-        let weak = window.as_weak();
-        window.on_back(move || {
-            let _ = player.stop();
-            if let Some(w) = weak.upgrade() {
-                w.set_page(PAGE_BROWSER);
-            }
-        });
+        let nav = nav.clone();
+        browser.set_play_handler(Box::new(move |source, path| nav.play(source, path)));
     }
 
     let capture = video::ScreenCapture::default();
@@ -112,7 +92,7 @@ fn run(
     {
         let playback = playback.clone();
         let start = play.map(|url| {
-            window.set_page(PAGE_PLAYER);
+            window.set_page(nav::PAGE_PLAYER);
             let title = title_for(&url);
             (url, title)
         });

@@ -1,6 +1,7 @@
 //! Wires the player to the playback screen: forwards UI actions to the
 //! player and reflects player events in the UI.
 
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -10,12 +11,16 @@ use slint::{ComponentHandle, ModelRc, SharedString, VecModel, Weak};
 
 use crate::{AppWindow, TrackItem};
 
+/// Called when a file plays to its end (not when stopped).
+pub type EndOfFileHandler = Box<dyn Fn()>;
+
 /// Track id the UI uses for "subtitles off".
 const SUBTITLES_OFF: i32 = -1;
 
 pub struct Playback {
     player: Arc<dyn Player>,
     window: Weak<AppWindow>,
+    on_end_of_file: RefCell<Option<EndOfFileHandler>>,
 }
 
 impl Playback {
@@ -25,6 +30,7 @@ impl Playback {
         let this = Rc::new(Self {
             player: player.clone(),
             window: window.as_weak(),
+            on_end_of_file: RefCell::new(None),
         });
 
         // mpv signals pending events from its own thread; drain them on the
@@ -84,6 +90,10 @@ impl Playback {
         }
     }
 
+    pub fn set_end_of_file_handler(&self, handler: EndOfFileHandler) {
+        *self.on_end_of_file.borrow_mut() = Some(handler);
+    }
+
     fn drain_events(&self) {
         while let Some(event) = self.player.poll_event() {
             self.handle(event);
@@ -111,8 +121,11 @@ impl Playback {
             }
             PlayerEvent::PauseChanged(paused) => w.set_paused(paused),
             PlayerEvent::TracksChanged => self.refresh_tracks(&w),
-            // Auto-next (#7) takes over here.
-            PlayerEvent::Ended(EndReason::EndOfFile) => w.set_message("Finished".into()),
+            PlayerEvent::Ended(EndReason::EndOfFile) => match self.on_end_of_file.borrow().as_ref()
+            {
+                Some(handler) => handler(),
+                None => w.set_message("Finished".into()),
+            },
             PlayerEvent::Ended(EndReason::Error(err)) => {
                 w.set_message(format!("Cannot play this file: {err}").into());
             }
