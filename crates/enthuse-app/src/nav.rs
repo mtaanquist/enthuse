@@ -6,10 +6,12 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
+use enthuse_core::folder::{display_title, episode_label};
 use enthuse_core::next::next_video;
 use enthuse_core::resume::{SaveSchedule, start_position};
 use enthuse_core::source::SourcePath;
 use enthuse_core::storage::{DEFAULT_WATCHED_THRESHOLD, Store};
+use enthuse_core::up_next::{UpNext, UpNextState};
 use enthuse_player::{EndReason, Player, PlayerEvent};
 use slint::{ComponentHandle, Weak};
 
@@ -26,6 +28,7 @@ struct Current {
     path: SourcePath,
     duration: Option<f64>,
     schedule: SaveSchedule,
+    up_next: UpNext,
 }
 
 pub struct Nav {
@@ -35,6 +38,8 @@ pub struct Nav {
     browser: Rc<Browser>,
     store: Rc<Store>,
     current: RefCell<Option<Current>>,
+    /// The file after the current one in its folder, once looked up.
+    next: RefCell<Option<SourcePath>>,
     on_leave_player: RefCell<Option<Box<dyn Fn()>>>,
     /// Bumped whenever the user or auto-next starts or stops a file, so a
     /// slow next-file lookup does not override what happened meanwhile.
@@ -56,6 +61,7 @@ impl Nav {
             browser,
             store,
             current: RefCell::new(None),
+            next: RefCell::new(None),
             on_leave_player: RefCell::new(None),
             generation: Cell::new(0),
         });
@@ -76,6 +82,21 @@ impl Nav {
         window.global::<PlayerModel>().on_next(move || {
             if let Some(nav) = weak.upgrade() {
                 nav.skip_next();
+            }
+        });
+        let weak = Rc::downgrade(&this);
+        window.global::<PlayerModel>().on_up_next_play(move || {
+            if let Some(nav) = weak.upgrade() {
+                nav.play_up_next();
+            }
+        });
+        let weak = Rc::downgrade(&this);
+        window.global::<PlayerModel>().on_up_next_cancel(move || {
+            if let Some(nav) = weak.upgrade() {
+                if let Some(current) = nav.current.borrow_mut().as_mut() {
+                    current.up_next.cancel();
+                }
+                nav.show_up_next(UpNextState::Hidden);
             }
         });
         // Replaces Playback's own Retry, so a file from a source resumes
@@ -120,12 +141,15 @@ impl Nav {
                     None
                 };
                 self.playback.open(&url, path.name().unwrap_or(&url), start);
+                *self.next.borrow_mut() = None;
+                self.show_up_next(UpNextState::Hidden);
                 self.find_next(&source, &path);
                 *self.current.borrow_mut() = Some(Current {
                     source,
                     path,
                     duration: state.and_then(|s| s.duration),
                     schedule: SaveSchedule::new(start),
+                    up_next: UpNext::new(),
                 });
                 w.set_page(PAGE_PLAYER);
             }
@@ -149,7 +173,9 @@ impl Nav {
                 if let Some(this) = this.upgrade()
                     && this.generation.get() == generation
                 {
-                    this.playback.set_has_next(matches!(next, Ok(Some(_))));
+                    let next = next.ok().flatten();
+                    this.playback.set_has_next(next.is_some());
+                    *this.next.borrow_mut() = next;
                 }
             },
         );
@@ -189,13 +215,14 @@ impl Nav {
     }
 
     /// Saves the position, stops playback and returns to the browser.
-    pub fn show_browser(&self) {
+    pub fn show_browser(self: &Rc<Self>) {
         self.save_position();
         if let Some(f) = self.on_leave_player.borrow().as_ref() {
             f();
         }
         self.generation.set(self.generation.get() + 1);
         *self.current.borrow_mut() = None;
+        self.show_up_next(UpNextState::Hidden);
         let _ = self.player.stop();
         if let Some(w) = self.window.upgrade() {
             w.set_page(PAGE_BROWSER);
@@ -241,12 +268,18 @@ impl Nav {
                 }
             }
             PlayerEvent::PositionChanged(Some(p)) => {
-                let mut current = self.current.borrow_mut();
-                if let Some(current) = current.as_mut()
-                    && current.schedule.due(*p)
-                {
-                    self.store_position(current, *p, false);
-                }
+                let has_next = self.next.borrow().is_some();
+                let up_next = {
+                    let mut current = self.current.borrow_mut();
+                    let Some(current) = current.as_mut() else {
+                        return;
+                    };
+                    if current.schedule.due(*p) {
+                        self.store_position(current, *p, false);
+                    }
+                    current.up_next.update(*p, current.duration, has_next)
+                };
+                self.show_up_next(up_next);
             }
             PlayerEvent::PauseChanged(true) => self.save_position(),
             PlayerEvent::Ended(EndReason::EndOfFile) => self.finished(),
@@ -261,13 +294,72 @@ impl Nav {
             self.show_browser();
             return;
         };
-        if let Err(err) = self
-            .store
-            .set_watched(current.source.id, &current.path, true)
-        {
+        self.mark_watched(&current.source, &current.path);
+        // Cancelling "Up next" turns auto-next off for this file.
+        if current.up_next.is_cancelled() {
+            self.show_browser();
+        } else {
+            self.play_next(current.source, current.path);
+        }
+    }
+
+    fn mark_watched(&self, source: &SourceRef, path: &SourcePath) {
+        if let Err(err) = self.store.set_watched(source.id, path, true) {
             eprintln!("enthuse: cannot mark watched: {err}");
         }
-        self.play_next(current.source, current.path);
+    }
+
+    /// Shows, updates or hides the up next card. When the countdown runs
+    /// out, plays the next file. In PiP there is no card, and the next file
+    /// starts at the end as before.
+    fn show_up_next(self: &Rc<Self>, state: UpNextState) {
+        let Some(w) = self.window.upgrade() else {
+            return;
+        };
+        let model = w.global::<PlayerModel>();
+        match state {
+            UpNextState::Counting(seconds) if !w.get_pip_active() => {
+                let name = self
+                    .next
+                    .borrow()
+                    .as_ref()
+                    .and_then(|n| n.name().map(str::to_owned))
+                    .unwrap_or_default();
+                let label = episode_label(&name);
+                let title = if label.is_empty() {
+                    display_title(&name)
+                } else {
+                    label
+                };
+                model.set_up_next_title(title.into());
+                model.set_up_next_seconds(seconds as i32);
+                model.set_up_next_visible(true);
+            }
+            UpNextState::Due if !w.get_pip_active() => {
+                model.set_up_next_visible(false);
+                self.play_up_next();
+            }
+            _ => model.set_up_next_visible(false),
+        }
+    }
+
+    /// "Play now", or the countdown ran out: the current file counts as
+    /// watched and the next one starts.
+    fn play_up_next(self: &Rc<Self>) {
+        let Some(next) = self.next.borrow().clone() else {
+            return;
+        };
+        let Some(current) = self
+            .current
+            .borrow()
+            .as_ref()
+            .map(|c| (c.source.clone(), c.path.clone()))
+        else {
+            return;
+        };
+        self.save_position();
+        self.mark_watched(&current.0, &current.1);
+        self.play(current.0, next);
     }
 
     /// Opens the next video after `path` in its folder, or returns to the

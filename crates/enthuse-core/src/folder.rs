@@ -172,6 +172,65 @@ pub fn progress(state: &WatchState) -> f64 {
     }
 }
 
+/// The episode line for a file: the episode code and the episode's own
+/// title when the name has one after the number ("S02E06 Lantern Rock" for
+/// `Harbor Lights - S02E06 - Lantern Rock.mkv`), or the code alone. Release
+/// tags such as `1080p` end the title. Empty when there is no episode.
+pub fn episode_label(file_name: &str) -> String {
+    let Some(episode) = parse_episode(file_name) else {
+        return String::new();
+    };
+    let stem = file_name
+        .rsplit_once('.')
+        .filter(|(stem, ext)| !stem.is_empty() && ext.len() <= 4)
+        .map_or(file_name, |(stem, _)| stem);
+    let words: Vec<&str> = stem
+        .split([' ', '.', '_'])
+        .filter(|w| !w.is_empty())
+        .collect();
+    // The fewest words, from the episode's first word, that still parse.
+    let title = episode_start(stem)
+        .and_then(|at| {
+            // Byte offset of each word within `stem`.
+            let offset = |w: &str| w.as_ptr() as usize - stem.as_ptr() as usize;
+            let first = words.iter().position(|w| offset(w) >= at)?;
+            (first + 1..=words.len())
+                .find(|&end| parse_episode(&words[first..end].join(" ")).is_some())
+        })
+        .map(|end| {
+            words[end..]
+                .iter()
+                .skip_while(|w| **w == "-")
+                .take_while(|w| !is_release_tag(w))
+                .copied()
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .unwrap_or_default();
+    let title = title.trim_matches(|c: char| c == '-' || c == ' ');
+    if title.is_empty() {
+        episode.code()
+    } else {
+        format!("{} {title}", episode.code())
+    }
+}
+
+/// Release tags that follow the title in file names: `1080p`, `x264`,
+/// `WEB-DL`, `[group]` and the like.
+fn is_release_tag(word: &str) -> bool {
+    let w = word.to_ascii_lowercase();
+    let resolution =
+        w.ends_with('p') && w.len() > 3 && w[..w.len() - 1].bytes().all(|b| b.is_ascii_digit());
+    resolution
+        || w.starts_with('[')
+        || w.starts_with('(')
+        || [
+            "x264", "x265", "h264", "h265", "hevc", "av1", "web", "web-dl", "webrip", "bluray",
+            "bdrip", "hdtv", "dvdrip", "remux", "hdr", "10bit", "proper", "repack", "multi",
+        ]
+        .contains(&w.as_str())
+}
+
 /// Byte index where the episode number starts in `name`, if it has one.
 fn episode_start(name: &str) -> Option<usize> {
     parse_episode(name)?;
@@ -473,6 +532,22 @@ mod tests {
         assert_eq!(display_title("E06 Lantern Rock.mkv"), "E06 Lantern Rock");
         assert_eq!(display_title("Field_Notes_2x03.mp4"), "Field Notes");
         assert_eq!(display_title("no extension"), "no extension");
+    }
+
+    #[test]
+    fn episode_labels() {
+        assert_eq!(
+            episode_label("Harbor Lights - S02E06 - Lantern Rock.mkv"),
+            "S02E06 Lantern Rock"
+        );
+        assert_eq!(
+            episode_label("Harbor.Lights.S02E05.The.Long.Tide.1080p.WEB-DL.mkv"),
+            "S02E05 The Long Tide"
+        );
+        assert_eq!(episode_label("Harbor.Lights.S02E05.1080p.mkv"), "S02E05");
+        assert_eq!(episode_label("Field_Notes_2x03.mp4"), "S02E03");
+        assert_eq!(episode_label("Show - Episode 6 - Pilot.mkv"), "E06 Pilot");
+        assert_eq!(episode_label("Some Film (2019).mkv"), "");
     }
 
     #[test]
