@@ -6,6 +6,7 @@ export { KeyFocus }
 import { ButtonVariant, IconButton, PillButton } from "components/buttons.slint";
 import { Section, Shell } from "components/sidebar.slint";
 import { FocusGrid } from "components/behavior.slint";
+import { TooltipLayer } from "components/tip-text.slint";
 import { BrowserModel, BrowserPage, Toast } from "browser.slint";
 import { HomeModel, HomePage } from "home.slint";
 import { PlayerModel, PlayerPage } from "player.slint";
@@ -500,6 +501,8 @@ component AppScreens inherits Rectangle {
     }
 
     Toast { }
+
+    TooltipLayer { }
 
     // Escape (or Backspace) goes up a folder in Browse, and from the top of
     // a section back to Home. Returns whether the key was used.

@@ -1,0 +1,119 @@
+// One line of text that ellipsizes, and shows the full text in a tooltip
+// when it was cut and the pointer rests on its row (docs/ui.md, "Long
+// names"). `hovered` comes from the row's own hover state, so the tip
+// shows wherever on the row the pointer is.
+//
+// The tip is drawn by a TooltipLayer on top of the screens rather than in
+// a PopupWindow, which would swallow the click on the row under it.
+
+import { Theme } from "../theme.slint";
+
+// What the tooltip layer shows. Only TipText and TooltipLayer use it.
+export global Tooltip {
+    in-out property <string> text;
+    // Top left of the tip, in window coordinates.
+    in-out property <length> x;
+    in-out property <length> y;
+    // Bumped while the TipText that set the tip is still hovered. When it
+    // stops (the row was destroyed by a click, scrolled away), the layer
+    // hides the tip.
+    in-out property <int> alive;
+}
+
+export component TipText inherits Rectangle {
+    in property <string> text;
+    in property <color> text-color: Theme.text;
+    in property <length> font-size: Theme.body-size;
+    in property <int> font-weight: Theme.body-weight;
+    in property <bool> hovered;
+
+    property <bool> cut: label.preferred-width > root.width + 0.5px;
+    property <bool> showing;
+
+    min-width: 0;
+    preferred-width: label.preferred-width;
+    min-height: label.preferred-height;
+    preferred-height: label.preferred-height;
+    horizontal-stretch: 1;
+
+    label := Text {
+        width: root.width;
+        height: root.height;
+        text: root.text;
+        color: root.text-color;
+        font-size: root.font-size;
+        font-weight: root.font-weight;
+        overflow: elide;
+        vertical-alignment: center;
+    }
+
+    Timer {
+        interval: 700ms;
+        running: root.hovered && root.cut && !root.showing;
+        triggered => {
+            root.showing = true;
+            Tooltip.text = root.text;
+            Tooltip.x = root.absolute-position.x;
+            Tooltip.y = root.absolute-position.y + root.height + Theme.space-8;
+            Tooltip.alive += 1;
+        }
+    }
+
+    Timer {
+        interval: 150ms;
+        running: root.showing && root.hovered;
+        triggered => {
+            Tooltip.alive += 1;
+        }
+    }
+
+    changed hovered => {
+        if (!root.hovered && root.showing) {
+            root.showing = false;
+            if (Tooltip.text == root.text) {
+                Tooltip.text = "";
+            }
+        }
+    }
+}
+
+// Draws the tooltip. Place it last, over the whole window. It takes no
+// input, so clicks go to whatever is under it.
+export component TooltipLayer inherits Rectangle {
+    property <int> seen;
+
+    Timer {
+        interval: 400ms;
+        running: Tooltip.text != "";
+        triggered => {
+            if (root.seen == Tooltip.alive) {
+                Tooltip.text = "";
+            }
+            root.seen = Tooltip.alive;
+        }
+    }
+
+    if Tooltip.text != "": Rectangle {
+        property <length> w: min(tip-text.preferred-width + 2 * Theme.space-12, 520px, root.width - 2 * Theme.space-8);
+        x: max(Theme.space-8, min(Tooltip.x - root.absolute-position.x, root.width - self.w - Theme.space-8));
+        y: Tooltip.y - root.absolute-position.y;
+        width: self.w;
+        height: tip-text.preferred-height + 2 * Theme.space-8;
+        border-radius: Theme.radius-small;
+        background: Theme.overlay-card;
+        border-width: 1px;
+        border-color: Theme.line-strong;
+        drop-shadow-blur: 12px;
+        drop-shadow-color: rgba(0, 0, 0, 0.4);
+
+        tip-text := Text {
+            x: Theme.space-12;
+            y: Theme.space-8;
+            width: parent.width - 2 * Theme.space-12;
+            text: Tooltip.text;
+            color: Theme.text;
+            font-size: Theme.meta-size;
+            wrap: word-wrap;
+        }
+    }
+}

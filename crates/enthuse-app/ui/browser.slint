@@ -7,6 +7,7 @@ import { Theme, Icons, KeyFocus } from "theme.slint";
 import { ButtonVariant, IconButton, PillButton } from "components/buttons.slint";
 import { ButtonBehavior, FocusGrid } from "components/behavior.slint";
 import { SegmentedControl } from "components/segmented-control.slint";
+import { TipText } from "components/tip-text.slint";
 
 // Kinds and badges, kept in step with browser.rs.
 export enum ItemKind { source, folder, video }
@@ -239,12 +240,12 @@ export component FileRow inherits Rectangle {
                 alignment: center;
                 spacing: 2px;
 
-                Text {
+                TipText {
                     text: root.item.label;
-                    color: root.dim ? Theme.text-muted : Theme.text;
+                    hovered: behavior.has-hover;
+                    text-color: root.dim ? Theme.text-muted : Theme.text;
                     font-size: Theme.body-size;
                     font-weight: root.dim ? Theme.body-weight : Theme.body-strong-weight;
-                    overflow: elide;
                 }
 
                 if root.item.detail != "": Text {
@@ -402,12 +403,12 @@ component FileCard inherits Rectangle {
             }
         }
 
-        Text {
+        TipText {
             text: root.item.label;
-            color: root.item.badge == ItemBadge.watched ? Theme.text-muted : Theme.text;
+            hovered: behavior.has-hover;
+            text-color: root.item.badge == ItemBadge.watched ? Theme.text-muted : Theme.text;
             font-size: Theme.body-size;
             font-weight: Theme.body-strong-weight;
-            overflow: elide;
         }
 
         Text {
