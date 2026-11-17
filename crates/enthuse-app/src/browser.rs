@@ -98,9 +98,8 @@ impl Browser {
     /// Adds and saves a local folder, mount or UNC path as a source, unless
     /// it is already there. Returns its index in the source list.
     pub fn add_local(&self, path: &str) -> Option<usize> {
-        if path.is_empty() {
-            return None;
-        }
+        let path = normalize_location(path)?;
+        let path = path.as_str();
         if let Some(i) = self
             .sources
             .borrow()
@@ -343,6 +342,27 @@ impl Browser {
     }
 }
 
+/// Makes a typed folder path absolute, so it means the same folder however
+/// the app is started, and drops trailing separators, so `C:\Movies\` and
+/// `C:\Movies` are one source. Not `canonicalize`: on Windows that turns
+/// shares into `\\?\UNC\...` paths.
+fn normalize_location(path: &str) -> Option<String> {
+    let path = path.trim();
+    if path.is_empty() {
+        return None;
+    }
+    let absolute = std::path::absolute(path).ok()?;
+    let s = absolute.to_string_lossy();
+    let trimmed = s.trim_end_matches(['/', '\\']);
+    // Keep roots like "/" and "C:\" intact.
+    let keep_root = trimmed.is_empty() || trimmed.ends_with(':');
+    Some(if keep_root {
+        s.into_owned()
+    } else {
+        trimmed.to_owned()
+    })
+}
+
 /// "Movies / Action / 2020" style heading for a folder in a source.
 fn heading(source_name: &str, path: &SourcePath) -> String {
     std::iter::once(source_name)
@@ -354,6 +374,27 @@ fn heading(source_name: &str, path: &SourcePath) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normalizes_locations() {
+        assert_eq!(normalize_location("  "), None);
+        let cwd = std::env::current_dir().unwrap();
+        assert_eq!(
+            normalize_location("Movies").unwrap(),
+            cwd.join("Movies").to_string_lossy()
+        );
+        #[cfg(unix)]
+        {
+            assert_eq!(normalize_location("/srv/media/").unwrap(), "/srv/media");
+            assert_eq!(normalize_location("/").unwrap(), "/");
+        }
+        #[cfg(windows)]
+        {
+            assert_eq!(normalize_location(r"C:\Movies\").unwrap(), r"C:\Movies");
+            assert_eq!(normalize_location(r"\\nas\share\").unwrap(), r"\\nas\share");
+            assert_eq!(normalize_location(r"C:\").unwrap(), r"C:\");
+        }
+    }
 
     #[test]
     fn heading_joins_source_and_segments() {
