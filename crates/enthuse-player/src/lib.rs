@@ -50,6 +50,54 @@ pub struct Track {
     pub external: bool,
 }
 
+impl Track {
+    /// A short human-readable label, e.g. `English (SDH) [external]` or
+    /// `Track 3`.
+    pub fn label(&self) -> String {
+        let mut parts = Vec::new();
+        if let Some(lang) = &self.language {
+            parts.push(language_name(lang).unwrap_or(lang).to_owned());
+        }
+        if let Some(title) = &self.title {
+            if parts.is_empty() {
+                parts.push(title.clone());
+            } else {
+                parts.push(format!("({title})"));
+            }
+        }
+        if parts.is_empty() {
+            parts.push(format!("Track {}", self.id));
+        }
+        if self.external {
+            parts.push("[external]".to_owned());
+        }
+        parts.join(" ")
+    }
+}
+
+/// English names for common ISO 639 codes; others are shown as-is.
+fn language_name(code: &str) -> Option<&'static str> {
+    Some(match code.to_ascii_lowercase().as_str() {
+        "en" | "eng" => "English",
+        "da" | "dan" => "Danish",
+        "de" | "deu" | "ger" => "German",
+        "es" | "spa" => "Spanish",
+        "fi" | "fin" => "Finnish",
+        "fr" | "fra" | "fre" => "French",
+        "it" | "ita" => "Italian",
+        "ja" | "jpn" => "Japanese",
+        "ko" | "kor" => "Korean",
+        "nl" | "nld" | "dut" => "Dutch",
+        "no" | "nor" | "nb" | "nob" => "Norwegian",
+        "pl" | "pol" => "Polish",
+        "pt" | "por" => "Portuguese",
+        "ru" | "rus" => "Russian",
+        "sv" | "swe" => "Swedish",
+        "zh" | "zho" | "chi" => "Chinese",
+        _ => return None,
+    })
+}
+
 /// Why playback of a file ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EndReason {
@@ -143,4 +191,33 @@ pub trait Player: Send + Sync {
         &self,
         get_proc_address: GetProcAddress<'_>,
     ) -> Result<Box<dyn VideoRenderer>>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn track(language: Option<&str>, title: Option<&str>, external: bool) -> Track {
+        Track {
+            id: 3,
+            kind: TrackKind::Subtitle,
+            language: language.map(Into::into),
+            title: title.map(Into::into),
+            codec: None,
+            selected: false,
+            external,
+        }
+    }
+
+    #[test]
+    fn labels() {
+        assert_eq!(track(Some("eng"), None, false).label(), "English");
+        assert_eq!(
+            track(Some("dan"), Some("SDH"), false).label(),
+            "Danish (SDH)"
+        );
+        assert_eq!(track(None, Some("Commentary"), false).label(), "Commentary");
+        assert_eq!(track(None, None, false).label(), "Track 3");
+        assert_eq!(track(Some("xyz"), None, true).label(), "xyz [external]");
+    }
 }

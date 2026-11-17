@@ -8,3 +8,4 @@ pub mod natsort;
 pub mod paths;
 pub mod source;
 pub mod storage;
+pub mod time;

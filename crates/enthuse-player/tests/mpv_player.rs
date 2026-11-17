@@ -75,12 +75,18 @@ fn opens_at_start_position_and_seeks() {
             Some(10.0),
         )
         .unwrap();
-    wait_for(&player, Duration::from_secs(20), |e| {
-        *e == PlayerEvent::FileLoaded
-    });
+    // Right after FileLoaded, time-pos can still report the pre-seek
+    // position, so wait for the first reported position instead.
+    let events = wait_for(
+        &player,
+        Duration::from_secs(20),
+        |e| matches!(e, PlayerEvent::PositionChanged(Some(p)) if *p > 1.0),
+    );
     player.set_paused(true).unwrap();
-    let pos = player.position().unwrap_or(0.0);
-    assert!(pos >= 9.0, "started at {pos}");
+    let Some(PlayerEvent::PositionChanged(Some(pos))) = events.last() else {
+        unreachable!()
+    };
+    assert!(*pos >= 9.0, "started at {pos}; events: {events:?}");
 
     player.seek(20.0).unwrap();
     wait_for(

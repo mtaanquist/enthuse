@@ -1,0 +1,301 @@
+// Enthuse main window. Functional prototype UI: polish comes later.
+//
+// The window background is transparent so the video, drawn underneath by
+// mpv, shows through. Pages that are not the player draw their own
+// opaque background.
+
+export struct TrackItem {
+    id: int,
+    label: string,
+    selected: bool,
+}
+
+// Fixed geometry the self-test relies on (see src/selftest.rs).
+export global Layout {
+    out property <length> bar-height: 96px;
+    out property <length> button-size: 56px;
+    out property <length> gutter: 16px;
+}
+
+global Palette {
+    out property <color> accent: #ff0080;
+    out property <color> accent-pressed: #c00060;
+    out property <color> bar: #101418cc;
+    out property <color> text: #f4f6f8;
+    out property <color> muted: #9aa4ae;
+}
+
+component IconButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> primary;
+    callback clicked();
+
+    width: Layout.button-size;
+    height: Layout.button-size;
+    border-radius: self.height / 2;
+    background: primary ? (touch.pressed ? Palette.accent-pressed : Palette.accent)
+                        : (touch.pressed ? #ffffff40 : #ffffff20);
+
+    Text {
+        text: root.label;
+        color: Palette.text;
+        font-size: 15px;
+        font-weight: 600;
+    }
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+// Seek bar: tap or drag anywhere to seek. Large hit area for touch.
+component SeekBar inherits Rectangle {
+    in property <float> position;
+    in property <float> duration;
+    callback seek(float);
+
+    height: 40px;
+
+    property <float> fraction: duration > 0 ? clamp(position / duration, 0, 1) : 0;
+
+    track := Rectangle {
+        y: (parent.height - self.height) / 2;
+        height: 6px;
+        border-radius: 3px;
+        background: #ffffff40;
+
+        Rectangle {
+            x: 0;
+            width: parent.width * root.fraction;
+            border-radius: 3px;
+            background: Palette.accent;
+        }
+    }
+
+    Rectangle {
+        x: track.width * root.fraction - self.width / 2;
+        width: 18px;
+        height: 18px;
+        border-radius: 9px;
+        background: Palette.text;
+    }
+
+    touch := TouchArea {
+        function seek-to(x: length) {
+            if (root.duration > 0) {
+                root.seek(clamp(x / self.width, 0, 1) * root.duration);
+            }
+        }
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down) {
+                self.seek-to(self.mouse-x);
+            }
+        }
+        moved => {
+            if (self.pressed) {
+                self.seek-to(self.mouse-x);
+            }
+        }
+    }
+}
+
+component PlayerPage inherits Rectangle {
+    in property <bool> paused;
+    in property <float> position;
+    in property <float> duration;
+    in property <string> position-text;
+    in property <string> duration-text;
+    in property <string> title;
+    in property <string> message;
+    in property <[TrackItem]> subtitle-tracks;
+    callback toggle-pause();
+    callback seek(float);
+    callback select-subtitle(int);
+    callback back();
+
+    property <bool> show-subtitles;
+
+    // Top bar: back and title.
+    Rectangle {
+        x: 0;
+        y: 0;
+        height: Layout.button-size + 2 * Layout.gutter;
+        background: @linear-gradient(180deg, #000000a0 0%, #00000000 100%);
+
+        IconButton {
+            x: Layout.gutter;
+            y: Layout.gutter;
+            label: "Back";
+            clicked => { root.back(); }
+        }
+
+        Text {
+            x: Layout.gutter * 2 + Layout.button-size;
+            width: parent.width - self.x - Layout.gutter;
+            text: root.title;
+            color: Palette.text;
+            font-size: 18px;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+    }
+
+    if root.message != "": Rectangle {
+        width: min(parent.width - 2 * Layout.gutter, 520px);
+        height: 72px;
+        border-radius: 12px;
+        background: Palette.bar;
+
+        Text {
+            width: parent.width - 2 * Layout.gutter;
+            text: root.message;
+            color: Palette.text;
+            font-size: 16px;
+            wrap: word-wrap;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+
+    // Bottom bar: play/pause, seek, time, subtitles.
+    Rectangle {
+        x: 0;
+        y: parent.height - Layout.bar-height;
+        height: Layout.bar-height;
+        background: Palette.bar;
+
+        play := IconButton {
+            x: Layout.gutter;
+            y: (parent.height - self.height) / 2;
+            primary: true;
+            label: root.paused ? "Play" : "Pause";
+            clicked => { root.toggle-pause(); }
+        }
+
+        subs := IconButton {
+            x: parent.width - self.width - Layout.gutter;
+            y: (parent.height - self.height) / 2;
+            label: "Subs";
+            clicked => { root.show-subtitles = !root.show-subtitles; }
+        }
+
+        time := Text {
+            x: subs.x - self.width - Layout.gutter;
+            width: 130px;
+            text: root.position-text + " / " + root.duration-text;
+            color: Palette.muted;
+            font-size: 14px;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+        }
+
+        SeekBar {
+            x: play.x + play.width + Layout.gutter;
+            width: time.x - self.x - Layout.gutter;
+            y: (parent.height - self.height) / 2;
+            position: root.position;
+            duration: root.duration;
+            seek(t) => { root.seek(t); }
+        }
+    }
+
+    // Subtitle picker, above the bottom bar on the right.
+    if root.show-subtitles: Rectangle {
+        width: 260px;
+        height: min(list.preferred-height, root.height - Layout.bar-height - 2 * Layout.gutter);
+        x: parent.width - self.width - Layout.gutter;
+        y: parent.height - Layout.bar-height - self.height - Layout.gutter;
+        border-radius: 12px;
+        background: Palette.bar;
+        clip: true;
+
+        list := VerticalLayout {
+            padding: 8px;
+            for track in root.subtitle-tracks: Rectangle {
+                height: 48px;
+                border-radius: 8px;
+                background: item-touch.pressed ? #ffffff30 : (track.selected ? #ffffff18 : transparent);
+
+                Text {
+                    x: 12px;
+                    width: parent.width - 24px;
+                    text: (track.selected ? "* " : "  ") + track.label;
+                    color: Palette.text;
+                    font-size: 15px;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
+
+                item-touch := TouchArea {
+                    clicked => {
+                        root.select-subtitle(track.id);
+                        root.show-subtitles = false;
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: root.video-title == "" ? "Enthuse" : root.video-title + " - Enthuse";
+    preferred-width: 640px;
+    preferred-height: 480px;
+    min-width: 360px;
+    min-height: 270px;
+    background: transparent;
+    forward-focus: keys;
+
+    in property <bool> paused;
+    in property <float> position;
+    in property <float> duration;
+    in property <string> position-text: "0:00";
+    in property <string> duration-text: "0:00";
+    in property <string> video-title;
+    in property <string> message;
+    in property <[TrackItem]> subtitle-tracks;
+    callback toggle-pause();
+    callback seek(float);
+    callback seek-relative(float);
+    callback select-subtitle(int);
+    callback back();
+    // Rust-side plumbing: invoked on the UI thread when player events wait.
+    callback player-events-pending();
+
+    keys := FocusScope {
+        key-pressed(e) => {
+            if (e.text == " ") {
+                root.toggle-pause();
+                return accept;
+            }
+            if (e.text == Key.Escape) {
+                root.back();
+                return accept;
+            }
+            if (e.text == Key.LeftArrow) {
+                root.seek-relative(-10);
+                return accept;
+            }
+            if (e.text == Key.RightArrow) {
+                root.seek-relative(10);
+                return accept;
+            }
+            reject
+        }
+
+        PlayerPage {
+            paused: root.paused;
+            position: root.position;
+            duration: root.duration;
+            position-text: root.position-text;
+            duration-text: root.duration-text;
+            title: root.video-title;
+            message: root.message;
+            subtitle-tracks: root.subtitle-tracks;
+            toggle-pause => { root.toggle-pause(); }
+            seek(t) => { root.seek(t); }
+            select-subtitle(id) => { root.select-subtitle(id); }
+            back => { root.back(); }
+        }
+    }
+}
