@@ -112,6 +112,8 @@ export component PillButton inherits Rectangle {
     in property <length> size: Theme.touch-target;
     callback clicked();
 
+    // Sized to its content, also when placed outside a layout.
+    width: content.preferred-width;
     height: root.size;
     border-radius: self.height / 2;
     border-width: root.variant == ButtonVariant.outline ? 1px : 0px;
@@ -134,7 +136,7 @@ export component PillButton inherits Rectangle {
 
     property <bool> has-icon: root.icon.width > 0;
 
-    HorizontalLayout {
+    content := HorizontalLayout {
         padding-left: root.has-icon ? Theme.space-16 : Theme.space-20;
         padding-right: Theme.space-20;
         spacing: Theme.space-8;
