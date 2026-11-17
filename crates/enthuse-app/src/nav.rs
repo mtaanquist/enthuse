@@ -35,6 +35,7 @@ pub struct Nav {
     browser: Rc<Browser>,
     store: Rc<Store>,
     current: RefCell<Option<Current>>,
+    on_leave_player: RefCell<Option<Box<dyn Fn()>>>,
     /// Bumped whenever the user or auto-next starts or stops a file, so a
     /// slow next-file lookup does not override what happened meanwhile.
     generation: Cell<u64>,
@@ -55,6 +56,7 @@ impl Nav {
             browser,
             store,
             current: RefCell::new(None),
+            on_leave_player: RefCell::new(None),
             generation: Cell::new(0),
         });
 
@@ -110,9 +112,17 @@ impl Nav {
         }
     }
 
+    /// Runs when playback stops and the browser shows, e.g. to close PiP.
+    pub fn set_on_leave_player(&self, f: Box<dyn Fn()>) {
+        *self.on_leave_player.borrow_mut() = Some(f);
+    }
+
     /// Saves the position, stops playback and returns to the browser.
     pub fn show_browser(&self) {
         self.save_position();
+        if let Some(f) = self.on_leave_player.borrow().as_ref() {
+            f();
+        }
         self.generation.set(self.generation.get() + 1);
         *self.current.borrow_mut() = None;
         let _ = self.player.stop();
