@@ -14,7 +14,7 @@ env:
   CARGO_TERM_COLOR: always
   # Release tag of https://github.com/shinchiro/mpv-winbuild-cmake used for
   # the Windows libmpv dev package. Empty means "latest" (printed in the log).
-  MPV_WINBUILD_TAG: ""
+  MPV_WINBUILD_TAG: "20261111"
 
 jobs:
   check:
