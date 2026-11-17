@@ -114,7 +114,7 @@ impl Playback {
             // Auto-next (#7) takes over here.
             PlayerEvent::Ended(EndReason::EndOfFile) => w.set_message("Finished".into()),
             PlayerEvent::Ended(EndReason::Error(err)) => {
-                w.set_message(format!("Cannot play this file ({err})").into());
+                w.set_message(format!("Cannot play this file: {err}").into());
             }
             PlayerEvent::Ended(EndReason::Stopped) => {}
         }

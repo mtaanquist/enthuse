@@ -1,4 +1,6 @@
 // Enthuse main window. Functional prototype UI: polish comes later.
+
+import { ListView, LineEdit } from "std-widgets.slint";
 //
 // The window background is transparent so the video, drawn underneath by
 // mpv, shows through. Pages that are not the player draw their own
@@ -8,6 +10,14 @@ export struct TrackItem {
     id: int,
     label: string,
     selected: bool,
+}
+
+// A row in the folder browser.
+export struct BrowserItem {
+    label: string,
+    detail: string,
+    // 0 = source, 1 = folder, 2 = video.
+    kind: int,
 }
 
 // Fixed geometry the self-test relies on (see src/selftest.rs).
@@ -23,6 +33,9 @@ global Palette {
     out property <color> bar: #101418cc;
     out property <color> text: #f4f6f8;
     out property <color> muted: #9aa4ae;
+    out property <color> page: #14181c;
+    out property <color> row-pressed: #ffffff18;
+    out property <color> error: #ff8a80;
 }
 
 component IconButton inherits Rectangle {
@@ -237,14 +250,192 @@ component PlayerPage inherits Rectangle {
     }
 }
 
+
+component BrowserRow inherits Rectangle {
+    in property <BrowserItem> item;
+    callback clicked();
+
+    height: 64px;
+    background: touch.pressed ? Palette.row-pressed : transparent;
+
+    // Kind badge: our own simple shapes, no icon set needed for M1.
+    badge := Rectangle {
+        x: Layout.gutter;
+        width: 36px;
+        height: 36px;
+        border-radius: root.item.kind == 2 ? 18px : 6px;
+        background: root.item.kind == 2 ? Palette.accent : #ffffff30;
+
+        Text {
+            text: root.item.kind == 0 ? "S" : root.item.kind == 1 ? "F" : ">";
+            color: Palette.text;
+            font-size: 15px;
+            font-weight: 700;
+        }
+    }
+
+    VerticalLayout {
+        x: badge.x + badge.width + Layout.gutter;
+        width: parent.width - self.x - Layout.gutter;
+        alignment: center;
+
+        Text {
+            text: root.item.label;
+            color: Palette.text;
+            font-size: 17px;
+            overflow: elide;
+        }
+
+        if root.item.detail != "": Text {
+            text: root.item.detail;
+            color: Palette.muted;
+            font-size: 13px;
+            overflow: elide;
+        }
+    }
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+component BrowserPage inherits Rectangle {
+    in property <string> heading;
+    in property <bool> can-go-up;
+    in property <[BrowserItem]> items;
+    in property <bool> loading;
+    in property <string> error;
+    callback up();
+    callback activate(int);
+    callback add-source(string);
+
+    property <bool> adding;
+    changed adding => {
+        if (self.adding) {
+            path.focus();
+        }
+    }
+
+    background: Palette.page;
+
+    top := Rectangle {
+        x: 0;
+        y: 0;
+        height: Layout.button-size + 2 * Layout.gutter;
+
+        if root.can-go-up: IconButton {
+            x: Layout.gutter;
+            y: Layout.gutter;
+            label: "Up";
+            clicked => { root.up(); }
+        }
+
+        Text {
+            x: root.can-go-up ? Layout.gutter * 2 + Layout.button-size : Layout.gutter;
+            width: add.x - self.x - Layout.gutter;
+            text: root.heading;
+            color: Palette.text;
+            font-size: 20px;
+            font-weight: 600;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+
+        add := IconButton {
+            x: parent.width - self.width - Layout.gutter;
+            y: Layout.gutter;
+            primary: true;
+            label: root.adding ? "Close" : "Add";
+            clicked => { root.adding = !root.adding; }
+        }
+    }
+
+    add-row := Rectangle {
+        x: 0;
+        y: top.height;
+        height: root.adding ? 64px : 0px;
+        visible: root.adding;
+
+        path := LineEdit {
+            x: Layout.gutter;
+            y: (parent.height - self.height) / 2;
+            width: open.x - self.x - Layout.gutter;
+            height: 48px;
+            font-size: 15px;
+            placeholder-text: "Folder path, mount or \\\\server\\share";
+            accepted(text) => {
+                if (text != "") {
+                    root.add-source(text);
+                    self.text = "";
+                    root.adding = false;
+                }
+            }
+        }
+
+        open := IconButton {
+            x: parent.width - self.width - Layout.gutter;
+            y: (parent.height - self.height) / 2;
+            primary: true;
+            label: "Open";
+            clicked => {
+                if (path.text != "") {
+                    root.add-source(path.text);
+                    path.text = "";
+                    root.adding = false;
+                }
+            }
+        }
+    }
+
+    list := ListView {
+        x: 0;
+        y: add-row.y + add-row.height;
+        width: parent.width;
+        height: parent.height - self.y;
+
+        for item[index] in root.items: BrowserRow {
+            item: item;
+            clicked => { root.activate(index); }
+        }
+    }
+
+    if root.loading || root.error != "" || root.items.length == 0: Text {
+        x: Layout.gutter;
+        y: list.y;
+        width: parent.width - 2 * Layout.gutter;
+        height: list.height;
+        text: root.loading ? "Loading..."
+            : root.error != "" ? root.error
+            : root.can-go-up ? "No folders or videos here."
+            : "No sources yet. Use Add to open a folder.";
+        color: root.error != "" && !root.loading ? Palette.error : Palette.muted;
+        font-size: 16px;
+        wrap: word-wrap;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
 export component AppWindow inherits Window {
-    title: root.video-title == "" ? "Enthuse" : root.video-title + " - Enthuse";
+    title: root.page == 1 && root.video-title != "" ? root.video-title + " - Enthuse" : "Enthuse";
     preferred-width: 640px;
     preferred-height: 480px;
     min-width: 360px;
     min-height: 270px;
     background: transparent;
     forward-focus: keys;
+
+    // 0 = folder browser, 1 = player.
+    in property <int> page;
+
+    in property <string> browser-heading;
+    in property <bool> browser-can-go-up;
+    in property <[BrowserItem]> browser-items;
+    in property <bool> browser-loading;
+    in property <string> browser-error;
+    callback browser-up();
+    callback browser-activate(int);
+    callback add-source(string);
 
     in property <bool> paused;
     in property <float> position;
@@ -261,9 +452,20 @@ export component AppWindow inherits Window {
     callback back();
     // Rust-side plumbing: invoked on the UI thread when player events wait.
     callback player-events-pending();
+    // Rust-side plumbing: a folder listing finished on a worker thread.
+    callback listing-ready();
+
+    changed page => { keys.focus(); }
 
     keys := FocusScope {
         key-pressed(e) => {
+            if (root.page == 0) {
+                if (e.text == Key.Escape || e.text == Key.Backspace) {
+                    root.browser-up();
+                    return accept;
+                }
+                return reject;
+            }
             if (e.text == " ") {
                 root.toggle-pause();
                 return accept;
@@ -283,7 +485,18 @@ export component AppWindow inherits Window {
             reject
         }
 
-        PlayerPage {
+        if root.page == 0: BrowserPage {
+            heading: root.browser-heading;
+            can-go-up: root.browser-can-go-up;
+            items: root.browser-items;
+            loading: root.browser-loading;
+            error: root.browser-error;
+            up => { root.browser-up(); }
+            activate(i) => { root.browser-activate(i); }
+            add-source(path) => { root.add-source(path); }
+        }
+
+        if root.page == 1: PlayerPage {
             paused: root.paused;
             position: root.position;
             duration: root.duration;

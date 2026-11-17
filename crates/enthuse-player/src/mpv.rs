@@ -140,6 +140,20 @@ fn as_seconds(data: &PropertyData<'_>) -> Option<f64> {
     }
 }
 
+/// Readable text for a libmpv error, e.g. "loading failed" instead of
+/// "Raw(-13)".
+fn describe(err: &libmpv2::Error) -> String {
+    match err {
+        libmpv2::Error::Raw(code) => {
+            // SAFETY: mpv_error_string accepts any code and returns a pointer
+            // to a static, NUL-terminated string.
+            let text = unsafe { std::ffi::CStr::from_ptr(sys::mpv_error_string(*code)) };
+            text.to_string_lossy().into_owned()
+        }
+        other => other.to_string(),
+    }
+}
+
 fn end_reason(reason: sys::mpv_end_file_reason) -> EndReason {
     match reason {
         sys::mpv_end_file_reason_MPV_END_FILE_REASON_EOF => EndReason::EndOfFile,
@@ -238,7 +252,7 @@ impl Player for MpvPlayer {
                 }
                 // libmpv2 reports an end-file with an error code as Err.
                 // Other events carry no error, since we make no async calls.
-                Err(err) => return Some(PlayerEvent::Ended(EndReason::Error(err.to_string()))),
+                Err(err) => return Some(PlayerEvent::Ended(EndReason::Error(describe(&err)))),
             }
         }
     }
@@ -262,6 +276,16 @@ impl Player for MpvPlayer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn describes_raw_errors() {
+        assert_eq!(
+            describe(&libmpv2::Error::Raw(
+                sys::mpv_error_MPV_ERROR_LOADING_FAILED
+            )),
+            "loading failed"
+        );
+    }
 
     #[test]
     fn end_reasons() {
