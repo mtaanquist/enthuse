@@ -120,6 +120,79 @@ pub fn parse_episode(name: &str) -> Option<Episode> {
     None
 }
 
+/// A title for a file in lists outside its folder, such as "Continue
+/// watching": the part of the name before the episode number
+/// ("Harbor Lights" for `Harbor.Lights.S02E05.1080p.mkv`), or the file name
+/// without its extension. Dots and underscores read as spaces.
+pub fn display_title(file_name: &str) -> String {
+    let stem = file_name
+        .rsplit_once('.')
+        .filter(|(stem, ext)| !stem.is_empty() && ext.len() <= 4)
+        .map_or(file_name, |(stem, _)| stem);
+    let spaced: String = stem
+        .chars()
+        .map(|c| if c == '.' || c == '_' { ' ' } else { c })
+        .collect();
+    if let Some(at) = episode_start(&spaced) {
+        let show = spaced[..at].trim_end_matches([' ', '-', '(', '[']).trim();
+        if !show.is_empty() {
+            return show.to_owned();
+        }
+    }
+    spaced.trim().to_owned()
+}
+
+/// The line under a "Continue watching" card: the episode, if the name has
+/// one, and the time left ("S02E05, 31 min left"), or the resume time when
+/// the duration is unknown.
+pub fn continue_subtitle(file_name: &str, state: &WatchState) -> String {
+    let position = state.position.unwrap_or(0.0);
+    let left = state
+        .duration
+        .filter(|d| *d > 0.0)
+        .map(|d| (d - position).max(0.0));
+    let time = Badge::Resume {
+        position,
+        fraction: None,
+        left,
+    }
+    .label();
+    match parse_episode(file_name) {
+        Some(e) => format!("{}, {time}", e.code()),
+        None => time,
+    }
+}
+
+/// How far along a started file is (0 to 1), or 0 when the duration is not
+/// known.
+pub fn progress(state: &WatchState) -> f64 {
+    match (state.position, state.duration) {
+        (Some(p), Some(d)) if d > 0.0 => (p / d).clamp(0.0, 1.0),
+        _ => 0.0,
+    }
+}
+
+/// Byte index where the episode number starts in `name`, if it has one.
+fn episode_start(name: &str) -> Option<usize> {
+    parse_episode(name)?;
+    let lower = name.to_ascii_lowercase();
+    // Shrink the name from the right while it still has an episode number:
+    // the first word that loses it is where the number starts.
+    let words: Vec<usize> = lower
+        .char_indices()
+        .filter(|&(i, c)| {
+            c.is_ascii_alphanumeric()
+                && (i == 0 || !lower.as_bytes()[i - 1].is_ascii_alphanumeric())
+        })
+        .map(|(i, _)| i)
+        .collect();
+    words
+        .iter()
+        .rev()
+        .find(|&&i| parse_episode(&lower[i..]).is_some())
+        .copied()
+}
+
 /// The state badge on a video row.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Badge {
@@ -381,6 +454,44 @@ mod tests {
             .code(),
             "E06"
         );
+    }
+
+    #[test]
+    fn display_titles() {
+        assert_eq!(
+            display_title("Harbor.Lights.S02E05.1080p.mkv"),
+            "Harbor Lights"
+        );
+        assert_eq!(
+            display_title("Harbor Lights - S02E05 - The Long Tide.mkv"),
+            "Harbor Lights"
+        );
+        assert_eq!(
+            display_title("The Quiet Orbit (2021).mkv"),
+            "The Quiet Orbit (2021)"
+        );
+        assert_eq!(display_title("E06 Lantern Rock.mkv"), "E06 Lantern Rock");
+        assert_eq!(display_title("Field_Notes_2x03.mp4"), "Field Notes");
+        assert_eq!(display_title("no extension"), "no extension");
+    }
+
+    #[test]
+    fn continue_subtitles() {
+        let state = |position, duration| WatchState {
+            position: Some(position),
+            duration,
+            watched: false,
+        };
+        assert_eq!(
+            continue_subtitle("Harbor.Lights.S02E05.mkv", &state(600.0, Some(2460.0))),
+            "S02E05, 31 min left"
+        );
+        assert_eq!(
+            continue_subtitle("Some Film (2019).mkv", &state(65.0, None)),
+            "Resume at 1:05"
+        );
+        assert_eq!(progress(&state(600.0, Some(2400.0))), 0.25);
+        assert_eq!(progress(&state(600.0, None)), 0.0);
     }
 
     fn video(name: &str) -> Entry {

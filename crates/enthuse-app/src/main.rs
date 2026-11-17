@@ -6,6 +6,7 @@
 
 mod bg;
 mod browser;
+mod home;
 mod nav;
 mod pip;
 mod pip_geometry;
@@ -104,6 +105,7 @@ fn run(
     for folder in folders {
         browser.add_local(folder);
     }
+    let home = home::Home::new(&window, store.clone(), browser.clone());
     let nav = nav::Nav::new(
         &window,
         player.clone(),
@@ -111,6 +113,7 @@ fn run(
         browser.clone(),
         store,
     );
+    home.set_nav(&nav);
 
     let capture = video::ScreenCapture::default();
     // mpv needs the render context before a file is loaded, and the render
@@ -132,6 +135,7 @@ fn run(
     }
     let pip = pip::Pip::new(&window, browser.clone())?;
     playback.attach_side(pip.side());
+    home.attach_side(pip.side());
     {
         let pip = pip.clone();
         nav.set_on_leave_player(Box::new(move || pip.exit()));

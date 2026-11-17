@@ -164,8 +164,11 @@ impl Nav {
         } else {
             self.store.save_progress(id, path, position, duration)
         };
-        if let Err(err) = result {
-            eprintln!("enthuse: cannot save position: {err}");
+        match result {
+            // Home's "Continue watching" shows the new position.
+            Ok(()) if final_save => self.browser.changed(),
+            Ok(()) => {}
+            Err(err) => eprintln!("enthuse: cannot save position: {err}"),
         }
     }
 

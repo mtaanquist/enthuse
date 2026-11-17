@@ -1,0 +1,414 @@
+// Home screen (docs/ui.md, "Home"): continue watching and the sources.
+// Rust fills HomeModel for each window; the screen only displays it.
+
+import { ScrollView } from "std-widgets.slint";
+import { Theme, Icons } from "theme.slint";
+import { ButtonVariant, IconButton, PillButton } from "components/buttons.slint";
+import { ButtonBehavior } from "components/behavior.slint";
+
+export struct ContinueItem {
+    title: string,
+    // "S02E05, 31 min left"
+    subtitle: string,
+    // How far along (0..1).
+    progress: float,
+}
+
+export enum SourceIcon { drive, server, library }
+
+export struct SourceTileItem {
+    name: string,
+    // Path or address.
+    detail: string,
+    // "Local", "SMB", later "Plex" or "Jellyfin". "Offline" when unreachable.
+    kind-label: string,
+    icon: SourceIcon,
+    offline: bool,
+}
+
+export global HomeModel {
+    in property <[ContinueItem]> continue-items;
+    in property <[SourceTileItem]> sources;
+    // False until the sources are known, so first run doesn't flash.
+    in property <bool> loaded;
+
+    callback play(int);
+    callback open-source(int);
+    callback remove-source(int);
+    callback add-source();
+    // Asks Rust to load the lists again, e.g. when Home shows.
+    callback refresh();
+}
+
+component SectionHeading inherits Text {
+    color: Theme.text-secondary;
+    font-size: Theme.section-size;
+    font-weight: Theme.section-weight;
+    vertical-alignment: center;
+}
+
+component ContinueCard inherits Rectangle {
+    in property <ContinueItem> item;
+    callback clicked();
+
+    forward-focus: behavior;
+    accessible-role: button;
+    accessible-label: root.item.title + ", " + root.item.subtitle;
+    accessible-action-default => { root.clicked(); }
+
+    VerticalLayout {
+        spacing: Theme.space-8;
+
+        Rectangle {
+            height: self.width * 9 / 16;
+            border-radius: Theme.radius-medium;
+            background: behavior.has-hover ? Theme.line-strong : Theme.surface-raised;
+            clip: true;
+
+            animate background {
+                duration: Theme.hover-duration;
+            }
+
+            // Thumbnail slot (#68).
+            Image {
+                width: Theme.icon-size-large + 6px;
+                height: self.width;
+                source: Icons.video;
+                colorize: Theme.text-faint;
+            }
+
+            Rectangle {
+                x: Theme.space-16;
+                y: parent.height - self.height - Theme.space-16;
+                width: 36px;
+                height: 36px;
+                border-radius: 18px;
+                background: Theme.overlay-card;
+
+                Image {
+                    x: 12px;
+                    width: 14px;
+                    height: 14px;
+                    source: Icons.play;
+                    colorize: Theme.text;
+                }
+            }
+
+            Rectangle {
+                y: parent.height - self.height;
+                height: 4px;
+                background: Theme.track;
+
+                Rectangle {
+                    x: 0;
+                    width: parent.width * clamp(root.item.progress, 0, 1);
+                    background: Theme.accent;
+                }
+            }
+        }
+
+        VerticalLayout {
+            spacing: 2px;
+
+            Text {
+                text: root.item.title;
+                color: Theme.text;
+                font-size: Theme.body-size;
+                font-weight: Theme.body-strong-weight;
+                overflow: elide;
+            }
+
+            Text {
+                text: root.item.subtitle;
+                color: Theme.text-muted;
+                font-size: Theme.label-size;
+                overflow: elide;
+            }
+        }
+    }
+
+    behavior := ButtonBehavior {
+        ring-radius: Theme.radius-medium;
+        clicked => { root.clicked(); }
+    }
+}
+
+component SourceTile inherits Rectangle {
+    in property <SourceTileItem> item;
+    callback clicked();
+    callback remove();
+
+    height: 84px;
+    border-radius: Theme.radius-large;
+    border-width: 1px;
+    border-color: Theme.line;
+    background: behavior.pressed ? Theme.pressed(Theme.surface) : behavior.has-hover ? Theme.surface-raised : Theme.surface;
+    forward-focus: behavior;
+    accessible-role: button;
+    accessible-label: root.item.name + ", " + root.item.kind-label;
+    accessible-action-default => { root.clicked(); }
+
+    animate background {
+        duration: behavior.pressed ? 0ms : Theme.hover-duration;
+    }
+
+    HorizontalLayout {
+        padding-left: Theme.space-20;
+        padding-right: Theme.space-8;
+        spacing: Theme.space-16;
+        opacity: root.item.offline ? 0.5 : 1;
+
+        Rectangle {
+            width: Theme.touch-target;
+            height: Theme.touch-target;
+            horizontal-stretch: 0;
+            y: (parent.height - self.height) / 2;
+            border-radius: Theme.radius-medium;
+            background: Theme.surface-raised;
+
+            Image {
+                width: Theme.icon-size;
+                height: Theme.icon-size;
+                source: root.item.icon == SourceIcon.server ? Icons.server : root.item.icon == SourceIcon.library ? Icons.library : Icons.drive;
+                colorize: Theme.accent;
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            horizontal-stretch: 1;
+
+            Text {
+                text: root.item.name;
+                color: Theme.text;
+                font-size: Theme.body-size;
+                font-weight: Theme.body-strong-weight;
+                overflow: elide;
+            }
+
+            Text {
+                text: root.item.detail;
+                color: Theme.text-muted;
+                font-size: Theme.label-size;
+                overflow: elide;
+            }
+        }
+
+        Rectangle {
+            width: chip-text.preferred-width + 2 * Theme.space-12;
+            height: 28px;
+            horizontal-stretch: 0;
+            y: (parent.height - self.height) / 2;
+            border-radius: self.height / 2;
+            background: root.item.offline ? Theme.line-strong : Theme.surface-raised;
+
+            chip-text := Text {
+                text: root.item.kind-label;
+                color: root.item.offline ? Theme.danger : Theme.text-muted;
+                font-size: Theme.chip-size;
+                font-weight: Theme.chip-weight;
+            }
+        }
+
+        // Room for the menu button, which sits on top of the tile.
+        Rectangle {
+            width: Theme.touch-target;
+            horizontal-stretch: 0;
+        }
+    }
+
+    behavior := ButtonBehavior {
+        ring-radius: Theme.radius-large;
+        clicked => { root.clicked(); }
+    }
+
+    more := IconButton {
+        x: parent.width - self.width - Theme.space-8;
+        y: (parent.height - self.height) / 2;
+        variant: ButtonVariant.outline;
+        border-width: 0px;
+        icon: Icons.more;
+        label: "More for " + root.item.name;
+        clicked => { menu.show(); }
+    }
+
+    menu := PopupWindow {
+        x: more.x + more.width - 200px;
+        y: more.y + more.height + Theme.space-4;
+        width: 200px;
+
+        Rectangle {
+            border-radius: Theme.radius-medium;
+            background: Theme.surface-raised;
+            border-width: 1px;
+            border-color: Theme.line-strong;
+            drop-shadow-blur: 24px;
+            drop-shadow-color: rgba(0, 0, 0, 0.45);
+
+            VerticalLayout {
+                padding: Theme.space-4;
+
+                Rectangle {
+                    height: Theme.touch-target;
+                    border-radius: Theme.radius-small;
+                    background: remove-behavior.has-hover ? Theme.line-strong : transparent;
+                    accessible-role: button;
+                    accessible-label: "Remove source";
+                    accessible-action-default => { root.remove(); }
+
+                    HorizontalLayout {
+                        padding-left: Theme.space-12;
+                        spacing: Theme.space-12;
+
+                        Image {
+                            width: Theme.icon-size;
+                            source: Icons.close;
+                            colorize: Theme.danger;
+                            image-fit: contain;
+                        }
+
+                        Text {
+                            text: "Remove source";
+                            color: Theme.text;
+                            font-size: Theme.label-size;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    remove-behavior := ButtonBehavior {
+                        ring-radius: Theme.radius-small;
+                        clicked => {
+                            menu.close();
+                            root.remove();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component HomePage inherits Rectangle {
+    callback open-source(int);
+
+    property <length> pad: root.width < 700px ? Theme.space-24 : Theme.content-padding-x;
+    property <length> gap: Theme.space-24;
+
+    scroll := ScrollView {
+        property <length> inner: self.visible-width - 2 * root.pad;
+        // Continue watching: 4 cards, 3 or 2 when there is less room.
+        property <int> card-columns: self.inner >= 720px ? 4 : self.inner >= 520px ? 3 : 2;
+        property <length> card-width: (self.inner - (self.card-columns - 1) * root.gap) / self.card-columns;
+        property <int> card-count: min(HomeModel.continue-items.length, self.card-columns);
+        // Sources: 3 per row, 2 or 1 when there is less room.
+        property <int> tile-columns: self.inner >= 900px ? 3 : self.inner >= 480px ? 2 : 1;
+        property <length> tile-width: (self.inner - (self.tile-columns - 1) * root.gap) / self.tile-columns;
+
+        content-width: self.visible-width;
+        content-height: page.preferred-height;
+
+        page := VerticalLayout {
+            x: 0;
+            width: parent.visible-width;
+            padding-left: root.pad;
+            padding-right: root.pad;
+            padding-top: Theme.content-padding-top;
+            padding-bottom: Theme.space-48;
+            spacing: Theme.space-36;
+
+            Text {
+                text: "Home";
+                color: Theme.text;
+                font-size: Theme.title-size;
+                font-weight: Theme.title-weight;
+                letter-spacing: Theme.title-letter-spacing;
+            }
+
+            if HomeModel.continue-items.length > 0: VerticalLayout {
+                spacing: Theme.space-16;
+
+                SectionHeading {
+                    text: "Continue watching";
+                }
+
+                Rectangle {
+                    height: scroll.card-width * 9 / 16 + 56px;
+
+                    for item[index] in HomeModel.continue-items: ContinueCard {
+                        x: index * (scroll.card-width + root.gap);
+                        width: scroll.card-width;
+                        visible: index < scroll.card-count;
+                        item: item;
+                        clicked => { HomeModel.play(index); }
+                    }
+                }
+            }
+
+            if HomeModel.loaded && HomeModel.sources.length > 0: VerticalLayout {
+                spacing: Theme.space-16;
+
+                HorizontalLayout {
+                    SectionHeading {
+                        text: "Sources";
+                    }
+
+                    PillButton {
+                        icon: Icons.add;
+                        text: "Add source";
+                        clicked => { HomeModel.add-source(); }
+                    }
+                }
+
+                Rectangle {
+                    property <int> rows: ceil(HomeModel.sources.length / scroll.tile-columns);
+                    height: self.rows * 84px + max(0, self.rows - 1) * root.gap;
+
+                    for tile[index] in HomeModel.sources: SourceTile {
+                        x: mod(index, scroll.tile-columns) * (scroll.tile-width + root.gap);
+                        y: floor(index / scroll.tile-columns) * (84px + root.gap);
+                        width: scroll.tile-width;
+                        item: tile;
+                        clicked => { root.open-source(index); }
+                        remove => { HomeModel.remove-source(index); }
+                    }
+                }
+            }
+
+            // First run: one large prompt in place of the sources grid.
+            if HomeModel.loaded && HomeModel.sources.length == 0: Rectangle {
+                height: 240px;
+                border-radius: Theme.radius-large;
+                border-width: 1px;
+                border-color: Theme.line;
+                background: Theme.surface;
+
+                VerticalLayout {
+                    alignment: center;
+                    spacing: Theme.space-20;
+
+                    Text {
+                        text: "Add a folder or network share to get started";
+                        color: Theme.text;
+                        font-size: Theme.section-size;
+                        font-weight: Theme.section-weight;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+
+                    HorizontalLayout {
+                        alignment: center;
+
+                        PillButton {
+                            size: 48px;
+                            variant: ButtonVariant.primary;
+                            icon: Icons.add;
+                            text: "Add source";
+                            clicked => { HomeModel.add-source(); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -17,7 +17,8 @@ workspace = true
 enthuse-core.workspace = true
 enthuse-player.workspace = true
 glow = "0.18.0"
-slint = { version = "1.19", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-femtovg", "unstable-winit-030"] }
+rfd = "0.18.0"
+slint = { version = "1.19", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-femtovg", "unstable-winit-030", "raw-window-handle-06"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }

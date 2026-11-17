@@ -1,0 +1,282 @@
+//! Home screen: "Continue watching" and the sources (docs/ui.md, "Home").
+//! Fills `HomeModel` in both windows, so Home looks the same in the
+//! browser window during PiP.
+
+use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
+use std::time::Duration;
+
+use enthuse_core::folder::{continue_subtitle, display_title, progress};
+use enthuse_core::source::SourcePath;
+use enthuse_core::storage::{SourceId, Store};
+use slint::{ComponentHandle, Model, ModelRc, VecModel, Weak};
+
+use crate::browser::{Browser, SourceRef};
+use crate::nav::Nav;
+use crate::{AppWindow, BrowserWindow, ContinueItem, HomeModel, SourceIcon, SourceTileItem, bg};
+
+/// Cards in the "Continue watching" row.
+const CONTINUE_LIMIT: usize = 4;
+
+pub struct Home {
+    main: Weak<AppWindow>,
+    side: RefCell<Option<Weak<BrowserWindow>>>,
+    store: Rc<Store>,
+    browser: Rc<Browser>,
+    nav: RefCell<Option<std::rc::Weak<Nav>>>,
+    /// What each "Continue watching" card plays.
+    items: RefCell<Vec<(SourceRef, SourcePath)>>,
+    /// Shown source tiles, for marking offline ones when the check returns.
+    tiles: Rc<VecModel<SourceTileItem>>,
+    /// Last reachability result per source: true when offline.
+    offline: RefCell<HashMap<SourceId, bool>>,
+    /// Sources whose reachability check is still running. A dead share can
+    /// take a minute to fail; this keeps refreshes from piling up threads.
+    checking: RefCell<HashSet<SourceId>>,
+    /// The folder picker is open.
+    picking: Cell<bool>,
+}
+
+/// Connects a window's Home callbacks to `$home`.
+macro_rules! wire_callbacks {
+    ($window:expr, $home:expr) => {{
+        let model = $window.global::<HomeModel>();
+        let h = $home.clone();
+        model.on_play(move |i| h.play(i as usize));
+        let h = $home.clone();
+        model.on_open_source(move |i| h.browser.open_source(i as usize));
+        let h = $home.clone();
+        // Later, so the tile (and its menu) that asked is not destroyed
+        // while its own click is still being handled.
+        model.on_remove_source(move |i| {
+            let h = h.clone();
+            slint::Timer::single_shot(Duration::ZERO, move || h.browser.remove_source(i as usize));
+        });
+        let h = $home.clone();
+        model.on_add_source(move || h.pick_folder());
+        let h = $home.clone();
+        model.on_refresh(move || h.refresh());
+    }};
+}
+
+impl Home {
+    pub fn new(window: &AppWindow, store: Rc<Store>, browser: Rc<Browser>) -> Rc<Self> {
+        let this = Rc::new(Self {
+            main: window.as_weak(),
+            side: Default::default(),
+            store,
+            browser,
+            nav: Default::default(),
+            items: Default::default(),
+            tiles: Rc::new(VecModel::default()),
+            offline: Default::default(),
+            checking: Default::default(),
+            picking: Cell::new(false),
+        });
+        wire_callbacks!(window, this);
+        let weak = Rc::downgrade(&this);
+        this.browser.set_change_handler(Box::new(move || {
+            if let Some(home) = weak.upgrade() {
+                home.refresh();
+            }
+        }));
+        this.refresh();
+        this
+    }
+
+    /// Lets the browser window show Home too.
+    pub fn attach_side(self: &Rc<Self>, window: &BrowserWindow) {
+        wire_callbacks!(window, self);
+        *self.side.borrow_mut() = Some(window.as_weak());
+        self.refresh();
+    }
+
+    pub fn set_nav(&self, nav: &Rc<Nav>) {
+        *self.nav.borrow_mut() = Some(Rc::downgrade(nav));
+    }
+
+    /// Runs `f` with the Home model of each open window.
+    fn each_model(&self, f: impl Fn(HomeModel<'_>)) {
+        if let Some(w) = self.main.upgrade() {
+            f(w.global::<HomeModel>());
+        }
+        if let Some(w) = self.side.borrow().as_ref().and_then(|w| w.upgrade()) {
+            f(w.global::<HomeModel>());
+        }
+    }
+
+    /// Loads "Continue watching" and the sources again.
+    pub fn refresh(self: &Rc<Self>) {
+        // Continue watching: only files of sources that are still there.
+        let recent = self
+            .store
+            .continue_watching(CONTINUE_LIMIT * 2)
+            .unwrap_or_else(|err| {
+                eprintln!("enthuse: cannot load continue watching: {err}");
+                Vec::new()
+            });
+        let mut items = Vec::new();
+        let mut cards = Vec::new();
+        for (id, path, state) in recent {
+            let Some(source) = self.browser.source_by_id(id) else {
+                continue;
+            };
+            let name = path.name().unwrap_or_default().to_owned();
+            cards.push(ContinueItem {
+                title: display_title(&name).into(),
+                subtitle: continue_subtitle(&name, &state).into(),
+                progress: progress(&state) as f32,
+            });
+            items.push((source, path));
+            if cards.len() == CONTINUE_LIMIT {
+                break;
+            }
+        }
+        *self.items.borrow_mut() = items;
+
+        let sources = self.browser.sources();
+        let tiles: Vec<_> = {
+            let offline = self.offline.borrow();
+            sources
+                .iter()
+                .map(|(s, location)| {
+                    let offline = offline.get(&s.id).copied().unwrap_or(false);
+                    tile(&s.source.display_name(), location, offline)
+                })
+                .collect()
+        };
+        self.tiles.set_vec(tiles);
+
+        let cards = ModelRc::new(VecModel::from(cards));
+        let tiles = ModelRc::from(self.tiles.clone());
+        self.each_model(|m| {
+            m.set_continue_items(cards.clone());
+            m.set_sources(tiles.clone());
+            m.set_loaded(true);
+        });
+
+        // Check again whether each source can be listed (an unplugged
+        // drive, a share that is down). Listing can hang on a dead share,
+        // so it runs off the UI thread, one check per source at a time.
+        for (source, _) in sources {
+            if !self.checking.borrow_mut().insert(source.id) {
+                continue;
+            }
+            let this = Rc::downgrade(self);
+            let id = source.id;
+            bg::spawn(
+                move || source.source.list(&SourcePath::root()).is_err(),
+                move |offline| {
+                    if let Some(this) = this.upgrade() {
+                        this.checked(id, offline);
+                    }
+                },
+            );
+        }
+    }
+
+    /// Records a reachability result and updates the source's tile.
+    fn checked(&self, id: SourceId, offline: bool) {
+        self.checking.borrow_mut().remove(&id);
+        self.offline.borrow_mut().insert(id, offline);
+        // Find the tile by id: sources may have changed since the check began.
+        let sources = self.browser.sources();
+        let Some(index) = sources.iter().position(|(s, _)| s.id == id) else {
+            return;
+        };
+        if self
+            .tiles
+            .row_data(index)
+            .is_some_and(|t| t.offline != offline)
+        {
+            let (source, location) = &sources[index];
+            let name = source.source.display_name();
+            self.tiles
+                .set_row_data(index, tile(&name, location, offline));
+        }
+    }
+
+    fn play(&self, index: usize) {
+        let Some((source, path)) = self.items.borrow().get(index).cloned() else {
+            return;
+        };
+        if let Some(nav) = self.nav.borrow().as_ref().and_then(|n| n.upgrade()) {
+            nav.play(source, path);
+        }
+    }
+
+    /// Asks for a folder with the system dialog and adds it as a source.
+    fn pick_folder(self: &Rc<Self>) {
+        if self.picking.replace(true) {
+            return; // Already open.
+        }
+        let mut dialog = rfd::AsyncFileDialog::new().set_title("Add source");
+        // Owned by the window that asked, so it stays on top of it.
+        let side = self.side.borrow().as_ref().and_then(|w| w.upgrade());
+        let main = self.main.upgrade();
+        let parent = match (&side, &main) {
+            (Some(s), _) if s.window().is_visible() => Some(s.window().window_handle()),
+            (_, Some(m)) => Some(m.window().window_handle()),
+            _ => None,
+        };
+        if let Some(parent) = &parent {
+            dialog = dialog.set_parent(parent);
+        }
+        let picked = dialog.pick_folder();
+        let this = Rc::downgrade(self);
+        let spawned = slint::spawn_local(async move {
+            let folder = picked.await;
+            if let Some(this) = this.upgrade() {
+                this.picking.set(false);
+                if let Some(folder) = folder {
+                    this.browser.add_local(&folder.path().to_string_lossy());
+                }
+            }
+        });
+        if spawned.is_err() {
+            self.picking.set(false);
+        }
+    }
+}
+
+/// The tile for a source with `name` at `location`. UNC paths
+/// (`\\server\share`, or `//server/share`) are network shares.
+fn tile(name: &str, location: &str, offline: bool) -> SourceTileItem {
+    let network = is_network_path(location);
+    SourceTileItem {
+        name: name.into(),
+        detail: location.into(),
+        kind_label: if offline {
+            "Offline"
+        } else if network {
+            "SMB"
+        } else {
+            "Local"
+        }
+        .into(),
+        icon: if network {
+            SourceIcon::Server
+        } else {
+            SourceIcon::Drive
+        },
+        offline,
+    }
+}
+
+fn is_network_path(location: &str) -> bool {
+    location.starts_with(r"\\") || location.starts_with("//") || location.starts_with("smb://")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unc_paths_are_network_shares() {
+        assert!(is_network_path(r"\\nas\media"));
+        assert!(is_network_path("//nas/media"));
+        assert!(!is_network_path(r"D:\Movies"));
+        assert!(!is_network_path("/mnt/media"));
+    }
+}
