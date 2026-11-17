@@ -70,6 +70,11 @@ impl Pip {
             // Hidden once the video is back in the main window.
             CloseRequestResponse::KeepWindowShown
         });
+        // Closing the main window quits, even while PiP is open.
+        main.window().on_close_requested(|| {
+            let _ = slint::quit_event_loop();
+            CloseRequestResponse::HideWindow
+        });
         let weak = Rc::downgrade(&this);
         main.on_toggle_pip(move || {
             if let Some(pip) = weak.upgrade() {
@@ -109,6 +114,11 @@ impl Pip {
         }
         if let Some(m) = self.main.upgrade() {
             m.set_pip_active(false);
+            // The video only moves back once the main window draws, which a
+            // minimized window does not do.
+            if m.window().is_minimized() {
+                m.window().set_minimized(false);
+            }
         }
         let pip = self.window.as_weak();
         self.output.move_to(MAIN_WINDOW, move || {

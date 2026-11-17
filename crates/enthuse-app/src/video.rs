@@ -232,7 +232,13 @@ impl VideoOutput {
             self.release(id, st);
             return;
         }
-        if st.renderer.is_some() || active != id || holder.is_some() {
+        if st.renderer.is_some() {
+            // Still the active window, e.g. PiP was toggled on and off before
+            // this window drew a frame: finish any pending move here.
+            self.finish_move();
+            return;
+        }
+        if active != id || holder.is_some() {
             return;
         }
 
@@ -252,23 +258,36 @@ impl VideoOutput {
                     });
                 }));
                 st.renderer = Some(renderer);
-                let (ready, moved) = {
-                    let mut out = self.0.borrow_mut();
-                    out.holder = Some(id);
-                    if let Some(track) = out.restore_video.take() {
-                        let _ = out.player.select_track(TrackKind::Video, Some(track));
-                    }
-                    (out.on_ready.take(), out.on_moved.take())
-                };
-                if let Some(f) = ready {
-                    f();
-                }
-                if let Some(f) = moved {
-                    f();
-                }
+                self.0.borrow_mut().holder = Some(id);
+                self.finish_move();
             }
             Err(err) => eprintln!("video: {err}"),
         }
+    }
+
+    /// Turns video back on and runs the pending ready / moved callbacks.
+    /// They run after the current frame, not inside it: they may load media
+    /// or hide a window, and hiding destroys that window's GL context
+    /// (making it current for teardown) while this frame still draws.
+    fn finish_move(&self) {
+        let (ready, moved) = {
+            let mut out = self.0.borrow_mut();
+            if let Some(track) = out.restore_video.take() {
+                let _ = out.player.select_track(TrackKind::Video, Some(track));
+            }
+            (out.on_ready.take(), out.on_moved.take())
+        };
+        if ready.is_none() && moved.is_none() {
+            return;
+        }
+        slint::Timer::single_shot(std::time::Duration::ZERO, move || {
+            if let Some(f) = ready {
+                f();
+            }
+            if let Some(f) = moved {
+                f();
+            }
+        });
     }
 
     /// Frees this window's render context and lets the active window
