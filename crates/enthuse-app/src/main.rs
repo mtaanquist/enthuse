@@ -63,6 +63,10 @@ fn run(
             ("hwdec", "no"),
             // Allow Mesa's software OpenGL (llvmpipe), which mpv rejects by default.
             ("gpu-sw", "yes"),
+            // mpv 0.37's full renderer on llvmpipe often draws only black
+            // (#27); the basic path is reliable and still exercises the
+            // render API and the compositing under Slint.
+            ("gpu-dumb-mode", "yes"),
             // Print mpv's log so CI failures can be diagnosed.
             ("terminal", "yes"),
             ("msg-level", "all=info"),

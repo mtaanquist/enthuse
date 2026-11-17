@@ -92,7 +92,15 @@ jobs:
           gh release download $tag --repo $repo --pattern $asset --output $archive --clobber
           $mesa = Join-Path $env:RUNNER_TEMP "mesa"
           7z x $archive "-o$mesa" -y | Out-Null
-          "MESA_X64=$mesa\x64" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          # Find the 64-bit opengl32.dll wherever the archive put it.
+          $dll = Get-ChildItem $mesa -Recurse -Filter opengl32.dll |
+            Where-Object { $_.DirectoryName -match 'x64' } | Select-Object -First 1
+          if (-not $dll) {
+            Get-ChildItem $mesa -Recurse -Depth 2 | ForEach-Object { $_.FullName }
+            throw "No x64 opengl32.dll in $asset"
+          }
+          Write-Host "Mesa DLLs: $($dll.DirectoryName)"
+          "MESA_X64=$($dll.DirectoryName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Self-test (Windows, Mesa llvmpipe)
         if: runner.os == 'Windows'
@@ -103,6 +111,8 @@ jobs:
         run: |
           cargo build -p enthuse-app
           # opengl32.dll next to the exe takes precedence over the system one.
-          Copy-Item "$env:MESA_X64\*.dll" target\debug\
+          $dlls = Get-ChildItem $env:MESA_X64 -Filter *.dll
+          if (-not $dlls) { throw "No DLLs in $env:MESA_X64" }
+          $dlls | Copy-Item -Destination target\debug\ -PassThru | ForEach-Object { Write-Host "copied $($_.Name)" }
           target\debug\enthuse.exe --self-test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
