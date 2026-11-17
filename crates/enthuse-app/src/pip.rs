@@ -86,6 +86,20 @@ impl Pip {
                 pip.fit_video();
             }
         });
+        // The browser window's now-playing bar: back to the video, or stop
+        // as the player's own Back does.
+        let weak = Rc::downgrade(&this);
+        this.side.on_show_video(move || {
+            if let Some(pip) = weak.upgrade() {
+                pip.exit();
+            }
+        });
+        let main_weak = main.as_weak();
+        this.side.on_stop(move || {
+            if let Some(m) = main_weak.upgrade() {
+                m.invoke_back();
+            }
+        });
         let weak = Rc::downgrade(&this);
         main.on_toggle_pip(move || {
             if let Some(pip) = weak.upgrade() {
@@ -97,6 +111,11 @@ impl Pip {
             }
         });
         Ok(this)
+    }
+
+    /// The browser window shown while PiP is on.
+    pub fn side(&self) -> &BrowserWindow {
+        &self.side
     }
 
     /// Turns the main window into the PiP player, and opens the browser
