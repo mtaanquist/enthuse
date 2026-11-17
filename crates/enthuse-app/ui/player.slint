@@ -295,8 +295,8 @@ component UpNextCard inherits Rectangle {
         padding: Theme.space-16;
         spacing: Theme.space-16;
 
-        // Thumbnail slot (#68).
-        Rectangle {
+        // Thumbnail slot (#68). Left out when narrow, so the buttons fit.
+        if root.width >= 340px: Rectangle {
             width: 96px;
             height: 54px;
             y: (parent.height - self.height) / 2;
@@ -671,8 +671,9 @@ export component PlayerPage inherits Rectangle {
         }
     }
 
-    if PlayerModel.up-next-visible && root.message == "": UpNextCard {
-        width: min(340px, root.width - 2 * root.pad);
+    // Hidden while a menu is open, so it never covers one.
+    if PlayerModel.up-next-visible && root.message == "" && PlayerModel.menu == 0: UpNextCard {
+        width: min(360px, root.width - 2 * root.pad);
         x: root.width - self.width - root.pad;
         y: top.height;
     }

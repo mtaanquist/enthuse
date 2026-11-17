@@ -187,9 +187,15 @@ impl Nav {
             .current
             .borrow()
             .as_ref()
-            .map(|c| (c.source.clone(), c.path.clone()));
+            .map(|c| (c.source.clone(), c.path.clone(), c.up_next.is_cancelled()));
         match current {
-            Some((source, path)) => self.play(source, path),
+            Some((source, path, cancelled)) => {
+                self.play(source, path);
+                // Cancel holds for the file, also after a retry.
+                if cancelled && let Some(c) = self.current.borrow_mut().as_mut() {
+                    c.up_next.cancel();
+                }
+            }
             None => self.playback.retry(),
         }
     }
@@ -268,7 +274,9 @@ impl Nav {
                 }
             }
             PlayerEvent::PositionChanged(Some(p)) => {
-                let has_next = self.next.borrow().is_some();
+                // No card in PiP, and the countdown waits until PiP ends.
+                let pip = self.window.upgrade().is_some_and(|w| w.get_pip_active());
+                let has_next = !pip && self.next.borrow().is_some();
                 let up_next = {
                     let mut current = self.current.borrow_mut();
                     let Some(current) = current.as_mut() else {

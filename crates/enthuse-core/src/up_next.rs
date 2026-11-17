@@ -2,14 +2,18 @@
 //!
 //! The card shows once the file is in its last [`WINDOW`] seconds and a next
 //! file exists, then counts down [`COUNTDOWN`] seconds of playback (so it
-//! pauses with the video) and asks for the next file to play. Seeking back
-//! out of the window hides it and restarts the countdown next time. Cancel
-//! hides it for the rest of the file.
+//! pauses with the video) and asks for the next file to play. Only steps of
+//! normal playback count, so a seek forward neither starts the next file nor
+//! shortens the countdown. Seeking back restarts the countdown, and seeking
+//! out of the window hides the card. Cancel hides it for the rest of the file.
 
 /// How close to the end the card appears, in seconds.
 pub const WINDOW: f64 = 20.0;
 /// How long it counts down before the next file plays, in seconds.
 pub const COUNTDOWN: f64 = 10.0;
+/// Largest forward step between two updates that still counts as playback.
+/// Anything bigger is a seek. Positions arrive several times a second.
+const MAX_STEP: f64 = 2.0;
 
 /// What the screen should do now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,8 +28,10 @@ pub enum UpNextState {
 /// Countdown state for one file. Make a new one for every file.
 #[derive(Debug, Default, Clone)]
 pub struct UpNext {
-    /// Position at which the countdown started.
-    start: Option<f64>,
+    /// Position at the last update inside the window.
+    last: Option<f64>,
+    /// Seconds of playback counted so far.
+    elapsed: f64,
     cancelled: bool,
     fired: bool,
 }
@@ -39,7 +45,7 @@ impl UpNext {
     /// end instead of going on to the next file.
     pub fn cancel(&mut self) {
         self.cancelled = true;
-        self.start = None;
+        self.last = None;
     }
 
     pub fn is_cancelled(&self) -> bool {
@@ -59,19 +65,22 @@ impl UpNext {
             return UpNextState::Hidden;
         }
         if duration - position > WINDOW {
-            self.start = None;
+            self.last = None;
             return UpNextState::Hidden;
         }
-        // Start, or start again after a seek back within the window.
-        let start = match self.start {
-            Some(s) if s <= position => s,
-            _ => position,
-        };
-        self.start = Some(start);
-        let left = COUNTDOWN - (position - start);
-        if left <= 0.0 {
+        match self.last {
+            // Entering the window, or a seek back: start over.
+            None => self.elapsed = 0.0,
+            Some(last) if position < last => self.elapsed = 0.0,
+            Some(last) if position - last <= MAX_STEP => self.elapsed += position - last,
+            // A seek forward counts as no playback.
+            Some(_) => {}
+        }
+        self.last = Some(position);
+        let left = COUNTDOWN - self.elapsed;
+        if left <= 1e-9 {
             self.fired = true;
-            self.start = None;
+            self.last = None;
             return UpNextState::Due;
         }
         UpNextState::Counting(left.ceil() as u32)
@@ -84,6 +93,17 @@ mod tests {
 
     const LEN: Option<f64> = Some(600.0);
 
+    /// Plays from `from` to `to` in half-second steps, returning the last state.
+    fn play(u: &mut UpNext, from: f64, to: f64) -> UpNextState {
+        let mut state = u.update(from, LEN, true);
+        let mut p = from;
+        while p + 0.5 <= to + 1e-9 {
+            p += 0.5;
+            state = u.update(p, LEN, true);
+        }
+        state
+    }
+
     #[test]
     fn hidden_before_the_window() {
         let mut u = UpNext::new();
@@ -95,8 +115,8 @@ mod tests {
     fn counts_down_then_fires_once() {
         let mut u = UpNext::new();
         assert_eq!(u.update(581.0, LEN, true), UpNextState::Counting(10));
-        assert_eq!(u.update(583.5, LEN, true), UpNextState::Counting(8));
-        assert_eq!(u.update(590.9, LEN, true), UpNextState::Counting(1));
+        assert_eq!(play(&mut u, 581.0, 583.5), UpNextState::Counting(8));
+        assert_eq!(play(&mut u, 583.5, 590.5), UpNextState::Counting(1));
         assert_eq!(u.update(591.0, LEN, true), UpNextState::Due);
         assert_eq!(u.update(592.0, LEN, true), UpNextState::Hidden);
     }
@@ -128,8 +148,7 @@ mod tests {
     #[test]
     fn seeking_out_of_the_window_resets() {
         let mut u = UpNext::new();
-        assert_eq!(u.update(581.0, LEN, true), UpNextState::Counting(10));
-        assert_eq!(u.update(586.0, LEN, true), UpNextState::Counting(5));
+        assert_eq!(play(&mut u, 581.0, 586.0), UpNextState::Counting(5));
         assert_eq!(u.update(300.0, LEN, true), UpNextState::Hidden);
         assert_eq!(u.update(582.0, LEN, true), UpNextState::Counting(10));
     }
@@ -137,15 +156,24 @@ mod tests {
     #[test]
     fn seeking_back_within_the_window_restarts() {
         let mut u = UpNext::new();
-        assert_eq!(u.update(586.0, LEN, true), UpNextState::Counting(10));
-        assert_eq!(u.update(590.0, LEN, true), UpNextState::Counting(6));
+        assert_eq!(play(&mut u, 586.0, 590.0), UpNextState::Counting(6));
         assert_eq!(u.update(583.0, LEN, true), UpNextState::Counting(10));
     }
 
     #[test]
-    fn a_seek_past_the_countdown_fires() {
+    fn a_seek_forward_does_not_count() {
         let mut u = UpNext::new();
         assert_eq!(u.update(581.0, LEN, true), UpNextState::Counting(10));
-        assert_eq!(u.update(598.0, LEN, true), UpNextState::Due);
+        assert_eq!(u.update(591.0, LEN, true), UpNextState::Counting(10));
+        assert_eq!(play(&mut u, 591.0, 594.0), UpNextState::Counting(7));
+        assert_eq!(u.update(598.0, LEN, true), UpNextState::Counting(7));
+    }
+
+    #[test]
+    fn paused_does_not_count() {
+        let mut u = UpNext::new();
+        assert_eq!(play(&mut u, 581.0, 584.0), UpNextState::Counting(7));
+        assert_eq!(u.update(584.0, LEN, true), UpNextState::Counting(7));
+        assert_eq!(u.update(584.0, LEN, true), UpNextState::Counting(7));
     }
 }
