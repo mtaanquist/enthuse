@@ -2,7 +2,7 @@
 //! position, and which marker the browser shows. Pure logic; the app does
 //! the storing.
 
-use crate::storage::WatchState;
+use crate::storage::{WatchState, reaches_threshold};
 
 /// How far playback must move (in seconds) before the position is saved
 /// again. Pausing, stopping and leaving the file save regardless.
@@ -12,13 +12,16 @@ pub const SAVE_INTERVAL_SECS: f64 = 10.0;
 pub const MIN_RESUME_SECS: f64 = 5.0;
 
 /// Where to start playing a file with saved state `state`: the saved
-/// position if the file is in progress, otherwise the beginning (`None`).
-pub fn start_position(state: Option<&WatchState>) -> Option<f64> {
+/// position, unless it is barely started or past the watched `threshold`,
+/// in which case the beginning (`None`). A watched file that was started
+/// again resumes too; marking a file watched clears its position.
+pub fn start_position(state: Option<&WatchState>, threshold: f64) -> Option<f64> {
     let state = state?;
-    if !state.in_progress() {
+    let position = state.position.filter(|p| *p >= MIN_RESUME_SECS)?;
+    if reaches_threshold(position, state.duration, threshold) {
         return None;
     }
-    state.position.filter(|p| *p >= MIN_RESUME_SECS)
+    Some(position)
 }
 
 /// Decides when the periodic position save is due.
@@ -94,23 +97,19 @@ mod tests {
     }
 
     #[test]
-    fn resumes_only_in_progress_files() {
-        assert_eq!(start_position(None), None);
-        assert_eq!(
-            start_position(Some(&state(Some(600.0), Some(1200.0), false))),
-            Some(600.0)
-        );
-        // Watched: start over, even if a position is left over.
-        assert_eq!(
-            start_position(Some(&state(Some(600.0), Some(1200.0), true))),
-            None
-        );
+    fn resume_decisions() {
+        let start = |s: WatchState| start_position(Some(&s), 0.9);
+        assert_eq!(start_position(None, 0.9), None);
+        assert_eq!(start(state(Some(600.0), Some(1200.0), false)), Some(600.0));
+        // Watched but started again: resume that.
+        assert_eq!(start(state(Some(600.0), Some(1200.0), true)), Some(600.0));
+        // Watched with no position (set_watched clears it): start over.
+        assert_eq!(start(state(None, Some(1200.0), true)), None);
+        // Past the threshold: start over.
+        assert_eq!(start(state(Some(1150.0), Some(1200.0), false)), None);
         // Barely started: start over.
-        assert_eq!(
-            start_position(Some(&state(Some(2.0), Some(1200.0), false))),
-            None
-        );
-        assert_eq!(start_position(Some(&state(None, None, false))), None);
+        assert_eq!(start(state(Some(2.0), Some(1200.0), false)), None);
+        assert_eq!(start(state(None, None, false)), None);
     }
 
     #[test]

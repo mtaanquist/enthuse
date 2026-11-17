@@ -239,8 +239,8 @@ impl Store {
         Ok(out)
     }
 
-    /// Saves the playback position of a file. Marks it watched once the
-    /// position passes the watched threshold.
+    /// Saves the playback position of a file when playback stops or pauses.
+    /// Marks it watched if the position is past the watched threshold.
     pub fn save_position(
         &self,
         source: SourceId,
@@ -248,8 +248,31 @@ impl Store {
         position: f64,
         duration: Option<f64>,
     ) -> Result<()> {
-        let position = position.max(0.0);
         let watched = reaches_threshold(position, duration, self.watched_threshold()?);
+        self.write_position(source, path, position, duration, watched)
+    }
+
+    /// Saves the position during playback. Never marks the file watched, so
+    /// seeking past the threshold and back does not lose the resume point.
+    pub fn save_progress(
+        &self,
+        source: SourceId,
+        path: &SourcePath,
+        position: f64,
+        duration: Option<f64>,
+    ) -> Result<()> {
+        self.write_position(source, path, position, duration, false)
+    }
+
+    fn write_position(
+        &self,
+        source: SourceId,
+        path: &SourcePath,
+        position: f64,
+        duration: Option<f64>,
+        watched: bool,
+    ) -> Result<()> {
+        let position = position.max(0.0);
         self.conn.execute(
             "INSERT INTO watch_state (source_id, path, position, duration, watched, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)
@@ -314,6 +337,17 @@ mod tests {
 
     fn store() -> Store {
         Store::open_in_memory().unwrap()
+    }
+
+    #[test]
+    fn progress_saves_never_mark_watched() {
+        let s = Store::open_in_memory().unwrap();
+        let src = s.add_source("local", "M", "/m").unwrap();
+        let f = SourcePath::parse("a.mkv").unwrap();
+        s.save_progress(src, &f, 950.0, Some(1000.0)).unwrap();
+        assert!(!s.watch_state(src, &f).unwrap().unwrap().watched);
+        s.save_position(src, &f, 950.0, Some(1000.0)).unwrap();
+        assert!(s.watch_state(src, &f).unwrap().unwrap().watched);
     }
 
     #[test]
