@@ -98,12 +98,18 @@ pub fn parse_episode(name: &str) -> Option<Episode> {
                 continue;
             }
             let mut j = i + prefix.len();
-            while j < b.len() && (b[j] == b' ' || b[j] == b'.' || b[j] == b'_') {
-                j += 1;
+            // A bare "E" needs its digits right after it ("E06"), or titles
+            // like "Formula E 2023" would count.
+            if prefix != "e" {
+                while j < b.len() && (b[j] == b' ' || b[j] == b'.' || b[j] == b'_') {
+                    j += 1;
+                }
             }
             let (episode, end) = digits_at(j);
             let ends_word = end == b.len() || !b[end].is_ascii_alphanumeric();
-            if let (Some(episode), true) = (episode, ends_word) {
+            // Four digits from 1900 on are a year ("Wall-E 2008"), not an episode.
+            let year = end - j == 4 && episode.is_some_and(|n| (1900..2100).contains(&n));
+            if let (Some(episode), true, false) = (episode, ends_word, year) {
                 return Some(Episode {
                     season: None,
                     episode,
@@ -251,9 +257,12 @@ impl FolderView {
             })
             .collect();
 
-        let videos: Vec<usize> = (0..entries.len())
+        // The action follows the episodes' natural order, whatever order the
+        // list is shown in.
+        let mut videos: Vec<usize> = (0..entries.len())
             .filter(|&i| entries[i].kind == EntryKind::Video)
             .collect();
+        videos.sort_by(|&a, &b| SortOrder::NameAscending.compare(&entries[a], &entries[b]));
         let watched = videos
             .iter()
             .filter(|&&i| markers[i] == Some(Marker::Watched))
@@ -352,6 +361,10 @@ mod tests {
         assert_eq!(parse_episode("Mexico 1986.mkv"), None);
         assert_eq!(parse_episode("Some Film.mkv"), None);
         assert_eq!(parse_episode("Series Finale.mkv"), None);
+        assert_eq!(parse_episode("Wall-E 2008.mkv"), None);
+        assert_eq!(parse_episode("Formula E 2023 Round 05.mkv"), None);
+        assert_eq!(parse_episode("Episode 2008.mkv"), None);
+        assert_eq!(parse_episode("E 06.mkv"), None);
         assert_eq!(
             Episode {
                 season: Some(2),
@@ -428,6 +441,16 @@ mod tests {
         let view = FolderView::new(&entries, &states, false);
         assert_eq!(view.action, Some(PrimaryAction::PlayNext(4)));
         assert_eq!(view.action_label(&entries).unwrap(), "Play next: S02E05");
+    }
+
+    #[test]
+    fn action_follows_natural_order_when_sorted_descending() {
+        let mut entries = season();
+        entries.sort_by(|a, b| SortOrder::NameDescending.compare(a, b));
+        let view = FolderView::new(&entries, &HashMap::new(), true);
+        // S02E01 is last in the list but still the one to play next.
+        assert_eq!(view.action, Some(PrimaryAction::PlayNext(7)));
+        assert_eq!(view.action_label(&entries).unwrap(), "Play next: S02E01");
     }
 
     #[test]

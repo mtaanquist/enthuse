@@ -36,6 +36,8 @@ export global BrowserModel {
     in property <[BrowserItem]> items;
     in property <bool> loading;
     in property <string> error;
+    // A short message at the bottom, e.g. a failed save. Rust clears it.
+    in property <string> toast;
     // Primary action ("Resume episode 5"), empty when there is none.
     in property <string> action-text;
     in property <string> resume-label;
@@ -61,6 +63,10 @@ component Breadcrumb inherits Rectangle {
     in property <[string]> crumbs;
     callback clicked(int);
 
+    // Shrinks first when the header is narrow.
+    min-width: 0px;
+    horizontal-stretch: 1;
+
     clip: true;
     height: Theme.touch-target;
 
@@ -84,6 +90,7 @@ component Breadcrumb inherits Rectangle {
                 width: label.preferred-width;
                 accessible-role: button;
                 accessible-enabled: !self.last;
+                accessible-action-default => { root.clicked(index); }
                 accessible-label: crumb;
                 forward-focus: behavior;
 
@@ -188,6 +195,7 @@ component FileRow inherits Rectangle {
     forward-focus: behavior;
     accessible-role: button;
     accessible-label: root.item.label + (root.item.badge-text != "" ? ", " + root.item.badge-text : "");
+    accessible-action-default => { root.clicked(); }
 
     bg := Rectangle {
         y: Theme.space-4;
@@ -280,6 +288,7 @@ component FileCard inherits Rectangle {
     forward-focus: behavior;
     accessible-role: button;
     accessible-label: root.item.label + (root.item.badge-text != "" ? ", " + root.item.badge-text : "");
+    accessible-action-default => { root.clicked(); }
 
     VerticalLayout {
         spacing: Theme.space-8;
@@ -543,7 +552,7 @@ export component BrowserPage inherits Rectangle {
                 back => { BrowserModel.up(); }
             }
 
-            if !BrowserModel.loading && BrowserModel.error == "" && (BrowserModel.view-mode == 0 || BrowserModel.at-sources): ListView {
+            if !BrowserModel.loading && BrowserModel.error == "" && BrowserModel.items.length > 0 && (BrowserModel.view-mode == 0 || BrowserModel.at-sources): ListView {
                 for item[index] in BrowserModel.items: FileRow {
                     item: item;
                     removable: BrowserModel.at-sources;
@@ -552,10 +561,14 @@ export component BrowserPage inherits Rectangle {
                 }
             }
 
-            if !BrowserModel.loading && BrowserModel.error == "" && BrowserModel.view-mode == 1 && !BrowserModel.at-sources: grid := ScrollView {
+            if !BrowserModel.loading && BrowserModel.error == "" && BrowserModel.items.length > 0 && BrowserModel.view-mode == 1 && !BrowserModel.at-sources: grid := ScrollView {
                 property <length> gap: Theme.space-20;
-                property <int> columns: max(1, floor((self.visible-width + self.gap) / (200px + self.gap)));
-                property <length> card-width: (self.visible-width - (self.columns - 1) * self.gap) / self.columns;
+                // Leave room on the right for the overlay scrollbar.
+                property <length> usable: self.visible-width - Theme.space-16;
+                property <int> columns: max(1, floor((self.usable + self.gap) / (200px + self.gap)));
+                property <length> card-width: (self.usable - (self.columns - 1) * self.gap) / self.columns;
+
+                content-width: self.visible-width;
                 // Thumbnail plus two lines of text.
                 property <length> card-height: self.card-width * 9 / 16 + 64px;
 
@@ -570,6 +583,30 @@ export component BrowserPage inherits Rectangle {
                     clicked => { BrowserModel.activate(index); }
                 }
             }
+        }
+    }
+
+    if BrowserModel.toast != "": Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: parent.height - self.height - Theme.space-24;
+        width: min(parent.width - 2 * Theme.space-24, toast-text.preferred-width + 2 * Theme.space-20);
+        height: max(Theme.touch-target, toast-text.preferred-height + 2 * Theme.space-12);
+        border-radius: Theme.radius-overlay;
+        background: Theme.overlay-card;
+        border-width: 1px;
+        border-color: Theme.line-strong;
+        drop-shadow-blur: 24px;
+        drop-shadow-color: rgba(0, 0, 0, 0.45);
+        accessible-role: text;
+        accessible-label: BrowserModel.toast;
+
+        toast-text := Text {
+            width: parent.width - 2 * Theme.space-20;
+            text: BrowserModel.toast;
+            color: Theme.text;
+            font-size: Theme.label-size;
+            wrap: word-wrap;
+            horizontal-alignment: center;
         }
     }
 }

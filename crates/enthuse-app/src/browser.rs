@@ -12,9 +12,12 @@ use enthuse_core::settings::cycle;
 use enthuse_core::source::{Entry, EntryKind, LocalFs, Source, SourceError, SourcePath};
 use enthuse_core::storage::{SourceId, Store};
 use enthuse_core::time::format_minutes;
-use slint::{ComponentHandle, ModelRc, SharedString, VecModel, Weak};
+use slint::{ComponentHandle, ModelRc, SharedString, Timer, TimerMode, VecModel, Weak};
 
 use crate::{AppWindow, BrowserItem, BrowserModel, BrowserWindow, ItemBadge, ItemKind, bg};
+
+/// How long a message from [`Browser::show_error`] stays.
+const TOAST_TIME: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Stored `kind` for [`LocalFs`] sources.
 const LOCAL: &str = "local";
@@ -105,6 +108,9 @@ pub struct Browser {
     location: RefCell<Location>,
     entries: RefCell<Vec<Entry>>,
     sort: Cell<SortOrder>,
+    toast_timer: Timer,
+    /// An error from loading the sources at start, shown once the window is.
+    startup_error: RefCell<Option<String>>,
     /// Index in `entries` of the file the primary action plays.
     action: Cell<Option<usize>>,
     /// Bumped on every navigation so late results from an earlier listing
@@ -123,6 +129,8 @@ impl Browser {
             location: RefCell::new(Location::Sources),
             entries: Default::default(),
             sort: Default::default(),
+            toast_timer: Timer::default(),
+            startup_error: Default::default(),
             action: Default::default(),
             generation: Default::default(),
             on_play: Default::default(),
@@ -132,6 +140,9 @@ impl Browser {
         wire_callbacks!(window, this);
 
         this.navigate(Location::Sources);
+        if let Some(err) = this.startup_error.take() {
+            this.show_error(&err);
+        }
         this
     }
 
@@ -203,7 +214,8 @@ impl Browser {
         let saved = match self.store.sources() {
             Ok(saved) => saved,
             Err(err) => {
-                self.show_error(&format!("Cannot load saved sources: {err}"));
+                *self.startup_error.borrow_mut() =
+                    Some(format!("Cannot load saved sources: {err}"));
                 return;
             }
         };
@@ -451,7 +463,23 @@ impl Browser {
 
     fn cycle_sort(self: &Rc<Self>) {
         self.sort.set(self.sort.get().next());
-        self.refresh();
+        if let Some(ui) = self.ui() {
+            ui.model().set_sort_label(self.sort.get().label().into());
+        }
+        self.rerender();
+    }
+
+    /// Shows the current listing again (re-sorted, new settings) without
+    /// listing the folder again, so the list doesn't blank or scroll back.
+    fn rerender(&self) {
+        let location = self.location.borrow().clone();
+        if let Location::Folder { source, path } = location {
+            let Some(id) = self.sources.borrow().get(source).map(|s| s.source.id) else {
+                return;
+            };
+            let entries = self.entries.borrow().clone();
+            self.show_listing(id, &path, Ok(entries));
+        }
     }
 
     /// Steps the resume setting of the current folder (inherit, off, on), or
@@ -477,10 +505,8 @@ impl Browser {
             self.show_error(&format!("Cannot save this setting: {err}"));
         }
         self.update_resume_label();
-        // "Resume at" markers depend on the setting.
-        if matches!(location, Location::Folder { .. }) {
-            self.refresh();
-        }
+        // The primary action depends on the setting.
+        self.rerender();
     }
 
     fn update_resume_label(&self) {
@@ -515,10 +541,35 @@ impl Browser {
         w.set_resume_label(label.into());
     }
 
+    /// Shows `message` at the bottom for a few seconds, over whatever the
+    /// browser shows (a failed save, a file that won't play).
     pub fn show_error(&self, message: &str) {
-        if let Some(ui) = self.ui() {
-            ui.model().set_error(message.into());
-        }
+        let Some(ui) = self.ui() else {
+            return;
+        };
+        ui.model().set_toast(message.into());
+        let view = self.view.borrow().clone();
+        let message = SharedString::from(message);
+        self.toast_timer
+            .start(TimerMode::SingleShot, TOAST_TIME, move || {
+                let clear = |m: BrowserModel<'_>| {
+                    if m.get_toast() == message {
+                        m.set_toast(SharedString::new());
+                    }
+                };
+                match &view {
+                    View::Main(w) => {
+                        if let Some(w) = w.upgrade() {
+                            clear(w.global::<BrowserModel>());
+                        }
+                    }
+                    View::Side(w) => {
+                        if let Some(w) = w.upgrade() {
+                            clear(w.global::<BrowserModel>());
+                        }
+                    }
+                }
+            });
     }
 }
 
