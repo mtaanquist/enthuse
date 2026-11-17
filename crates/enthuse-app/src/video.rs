@@ -4,8 +4,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use enthuse_player::gl::GlRenderContext;
-use enthuse_player::libmpv2::Mpv;
+use enthuse_player::{Player, VideoRenderer};
 use glow::HasContext;
 use slint::{ComponentHandle, GraphicsAPI, RenderingState, Rgba8Pixel, SharedPixelBuffer};
 
@@ -53,13 +52,13 @@ impl ScreenCapture {
 /// that, or mpv fails to open its video output.
 pub fn attach<C: ComponentHandle + 'static>(
     component: &C,
-    mpv: Arc<Mpv>,
+    player: Arc<dyn Player>,
     on_ready: impl FnOnce() + 'static,
     capture: ScreenCapture,
 ) -> Result<(), slint::SetRenderingNotifierError> {
     let mut on_ready = Some(on_ready);
     let weak = component.as_weak();
-    let mut state: Option<(GlRenderContext, glow::Context)> = None;
+    let mut state: Option<(Box<dyn VideoRenderer>, glow::Context)> = None;
 
     component
         .window()
@@ -76,10 +75,10 @@ pub fn attach<C: ComponentHandle + 'static>(
                     glow::Context::from_loader_function_cstr(|name| get_proc_address(name))
                 };
                 // SAFETY: as above.
-                match unsafe { GlRenderContext::new(mpv.clone(), get_proc_address) } {
+                match unsafe { player.create_renderer(get_proc_address) } {
                     Ok(mut ctx) => {
                         let weak = weak.clone();
-                        ctx.set_update_callback(move || {
+                        ctx.set_update_callback(Box::new(move || {
                             let weak = weak.clone();
                             // Called on an mpv thread: hop to the UI thread to redraw.
                             let _ = slint::invoke_from_event_loop(move || {
@@ -87,7 +86,7 @@ pub fn attach<C: ComponentHandle + 'static>(
                                     c.window().request_redraw();
                                 }
                             });
-                        });
+                        }));
                         state = Some((ctx, gl));
                         if let Some(f) = on_ready.take() {
                             f();
@@ -100,16 +99,15 @@ pub fn attach<C: ComponentHandle + 'static>(
                 let (Some((ctx, gl)), Some(c)) = (&state, weak.upgrade()) else {
                     return;
                 };
-                ctx.update();
                 let size = c.window().size();
                 // SAFETY: GL context is current (see RenderingSetup).
                 unsafe {
                     let saved = GlState::save(gl);
                     let fbo = saved.framebuffer;
+                    GlState::reset_for_mpv(gl);
                     // Slint renders to the window (FBO 0) or, for snapshots, to a
-                    // texture FBO. Both use GL's bottom-up row order, so mpv
-                    // always needs Y flipped.
-                    if let Err(err) = ctx.render(fbo, size.width as i32, size.height as i32, true) {
+                    // texture FBO; the renderer handles orientation for both.
+                    if let Err(err) = ctx.render(fbo, size.width as i32, size.height as i32) {
                         eprintln!("video: {err}");
                     }
                     saved.restore(gl);
@@ -146,7 +144,12 @@ struct GlState {
     viewport: [i32; 4],
     blend: bool,
     scissor: bool,
+    stencil: bool,
+    depth: bool,
+    cull_face: bool,
+    color_mask: [bool; 4],
     unpack_alignment: i32,
+    pixel_unpack_buffer: i32,
 }
 
 impl GlState {
@@ -167,8 +170,45 @@ impl GlState {
                 viewport,
                 blend: gl.is_enabled(glow::BLEND),
                 scissor: gl.is_enabled(glow::SCISSOR_TEST),
+                stencil: gl.is_enabled(glow::STENCIL_TEST),
+                depth: gl.is_enabled(glow::DEPTH_TEST),
+                cull_face: gl.is_enabled(glow::CULL_FACE),
+                color_mask: {
+                    let mut m = [0; 4];
+                    gl.get_parameter_i32_slice(glow::COLOR_WRITEMASK, &mut m);
+                    m.map(|v| v != 0)
+                },
                 unpack_alignment: gl.get_parameter_i32(glow::UNPACK_ALIGNMENT),
+                pixel_unpack_buffer: gl.get_parameter_i32(glow::PIXEL_UNPACK_BUFFER_BINDING),
             }
+        }
+    }
+
+    /// Puts GL into the default state mpv's renderer expects. Slint's
+    /// renderer may leave stencil or scissor tests on, which can hide the
+    /// video entirely.
+    ///
+    /// # Safety
+    /// The GL context behind `gl` must be current.
+    unsafe fn reset_for_mpv(gl: &glow::Context) {
+        // SAFETY: caller guarantees a current context.
+        unsafe {
+            for cap in [
+                glow::BLEND,
+                glow::SCISSOR_TEST,
+                glow::STENCIL_TEST,
+                glow::DEPTH_TEST,
+                glow::CULL_FACE,
+            ] {
+                gl.disable(cap);
+            }
+            gl.color_mask(true, true, true, true);
+            gl.bind_buffer(glow::PIXEL_UNPACK_BUFFER, None);
+            gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 4);
+            gl.use_program(None);
+            gl.bind_vertex_array(None);
+            gl.bind_buffer(glow::ARRAY_BUFFER, None);
+            gl.active_texture(glow::TEXTURE0);
         }
     }
 
@@ -197,6 +237,15 @@ impl GlState {
             gl.viewport(x, y, w, h);
             set_enabled(gl, glow::BLEND, self.blend);
             set_enabled(gl, glow::SCISSOR_TEST, self.scissor);
+            set_enabled(gl, glow::STENCIL_TEST, self.stencil);
+            set_enabled(gl, glow::DEPTH_TEST, self.depth);
+            set_enabled(gl, glow::CULL_FACE, self.cull_face);
+            let [r, g, b, a] = self.color_mask;
+            gl.color_mask(r, g, b, a);
+            gl.bind_buffer(
+                glow::PIXEL_UNPACK_BUFFER,
+                name(self.pixel_unpack_buffer, glow::NativeBuffer),
+            );
             gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, self.unpack_alignment);
         }
     }

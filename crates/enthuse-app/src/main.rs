@@ -10,7 +10,7 @@ mod video;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use enthuse_player::libmpv2::Mpv;
+use enthuse_player::{MpvPlayer, Player};
 
 slint::include_modules!();
 
@@ -42,37 +42,47 @@ fn run(source: &str, self_test: bool) -> Result<ExitCode, Box<dyn std::error::Er
         .renderer_name("femtovg".into())
         .select()?;
 
-    let mpv = Arc::new(Mpv::with_initializer(|init| {
-        // Render through the render API into our GL context.
-        init.set_option("vo", "libmpv")?;
-        init.set_option("keep-open", "yes")?;
-        if self_test {
+    let options: &[(&str, &str)] = if self_test {
+        &[
             // CI runners have no audio device and only software GL.
-            init.set_option("ao", "null")?;
-            init.set_option("hwdec", "no")?;
+            ("ao", "null"),
+            ("hwdec", "no"),
             // Allow Mesa's software OpenGL (llvmpipe), which mpv rejects by default.
-            init.set_option("gpu-sw", "yes")?;
+            ("gpu-sw", "yes"),
             // Print mpv's log so CI failures can be diagnosed.
-            init.set_option("terminal", "yes")?;
-            init.set_option("msg-level", "all=info")?;
-        } else {
-            init.set_option("hwdec", "auto-safe")?;
-        }
-        Ok(())
-    })?);
+            ("terminal", "yes"),
+            ("msg-level", "all=info"),
+        ]
+    } else {
+        &[]
+    };
+    let player: Arc<dyn Player> = Arc::new(MpvPlayer::new(options)?);
+
+    // Drain player events on the UI thread whenever mpv signals some.
+    {
+        let weak_player = Arc::downgrade(&player);
+        player.set_wakeup(Arc::new(move || {
+            let weak_player = weak_player.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(p) = weak_player.upgrade() {
+                    while let Some(_event) = p.poll_event() {}
+                }
+            });
+        }));
+    }
 
     let window = SpikeWindow::new()?;
     let capture = video::ScreenCapture::default();
     // mpv needs the render context before a file is loaded, and the render
     // context needs Slint's GL context, which exists once the window is shown.
     {
-        let mpv = mpv.clone();
+        let p = player.clone();
         let source = source.to_owned();
         video::attach(
             &window,
-            mpv.clone(),
+            player.clone(),
             move || {
-                if let Err(err) = mpv.command("loadfile", &[&source]) {
+                if let Err(err) = p.open(&source, None) {
                     eprintln!("enthuse: cannot open {source}: {err}");
                 }
             },
@@ -81,11 +91,11 @@ fn run(source: &str, self_test: bool) -> Result<ExitCode, Box<dyn std::error::Er
     }
 
     {
-        let mpv = mpv.clone();
+        let player = player.clone();
         let weak = window.as_weak();
         window.on_toggle_pause(move || {
-            let paused = !mpv.get_property::<bool>("pause").unwrap_or(false);
-            let _ = mpv.set_property("pause", paused);
+            let paused = !player.is_paused();
+            let _ = player.set_paused(paused);
             if let Some(w) = weak.upgrade() {
                 w.set_paused(paused);
             }
@@ -93,7 +103,7 @@ fn run(source: &str, self_test: bool) -> Result<ExitCode, Box<dyn std::error::Er
     }
 
     let outcome = if self_test {
-        selftest::start(&window, mpv.clone(), capture)
+        selftest::start(&window, player.clone(), capture)
     } else {
         Default::default()
     };

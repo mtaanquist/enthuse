@@ -15,6 +15,8 @@ use std::sync::Arc;
 use libmpv2::Mpv;
 use libmpv2_sys as sys;
 
+use crate::{GetProcAddress, PlayerError, VideoRenderer};
+
 /// Error from the mpv render API, holding mpv's error code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RenderError(pub c_int);
@@ -30,17 +32,13 @@ impl std::fmt::Display for RenderError {
 
 impl std::error::Error for RenderError {}
 
-/// A function that resolves OpenGL function pointers by name, like
-/// `eglGetProcAddress`. Slint hands one of these to rendering notifiers.
-pub type GetProcAddress<'a> = &'a dyn Fn(&CStr) -> *const c_void;
-
 type UpdateCallback = Box<dyn Fn() + Send + 'static>;
 
 /// An mpv render context bound to the app's OpenGL context.
 ///
 /// Holds a reference to the mpv core so the core always outlives the render
 /// context, as mpv requires.
-pub struct GlRenderContext {
+pub(crate) struct GlRenderContext {
     ctx: *mut sys::mpv_render_context,
     // Double-boxed so the pointer handed to mpv stays thin and stable.
     update_callback: Option<Box<UpdateCallback>>,
@@ -59,7 +57,7 @@ impl GlRenderContext {
     /// The OpenGL context that `get_proc_address` belongs to must be current
     /// on this thread, and every later call on the returned value (including
     /// drop) must happen on this thread with that context current.
-    pub unsafe fn new(
+    pub(crate) unsafe fn new(
         mpv: Arc<Mpv>,
         get_proc_address: GetProcAddress<'_>,
     ) -> Result<Self, RenderError> {
@@ -189,5 +187,28 @@ impl Drop for GlRenderContext {
         // unregisters the update callback, so it can be dropped after this.
         // The mpv core (`_mpv`) is dropped after this body runs.
         unsafe { sys::mpv_render_context_free(self.ctx) };
+    }
+}
+
+impl From<RenderError> for PlayerError {
+    fn from(err: RenderError) -> Self {
+        PlayerError(err.to_string())
+    }
+}
+
+impl VideoRenderer for GlRenderContext {
+    fn set_update_callback(&mut self, callback: Box<dyn Fn() + Send>) {
+        GlRenderContext::set_update_callback(self, callback);
+    }
+
+    fn render(&self, fbo: i32, width: i32, height: i32) -> crate::Result<()> {
+        // mpv draws bottom-up for both the window and texture FBOs (as the
+        // render spike's self-test showed), so always flip.
+        self.update();
+        Ok(GlRenderContext::render(self, fbo, width, height, true)?)
+    }
+
+    fn report_swap(&self) {
+        GlRenderContext::report_swap(self);
     }
 }

@@ -12,7 +12,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use enthuse_player::libmpv2::Mpv;
+use enthuse_player::Player;
 use slint::{ComponentHandle, Rgba8Pixel, SharedPixelBuffer};
 
 use crate::SpikeWindow;
@@ -39,7 +39,7 @@ impl Outcome {
     }
 }
 
-pub fn start(window: &SpikeWindow, mpv: Arc<Mpv>, capture: ScreenCapture) -> Outcome {
+pub fn start(window: &SpikeWindow, player: Arc<dyn Player>, capture: ScreenCapture) -> Outcome {
     let outcome = Outcome::default();
     let result = outcome.clone();
     let started = Instant::now();
@@ -69,7 +69,7 @@ pub fn start(window: &SpikeWindow, mpv: Arc<Mpv>, capture: ScreenCapture) -> Out
                 finish(false);
                 return;
             }
-            let pos = mpv.get_property::<f64>("time-pos").unwrap_or(0.0);
+            let pos = player.position().unwrap_or(0.0);
             if pos < MIN_PLAYBACK_SECS {
                 return;
             }
