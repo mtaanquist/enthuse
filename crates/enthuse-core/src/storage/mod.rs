@@ -1,0 +1,473 @@
+//! Persistent storage: saved sources, resume positions and watched state,
+//! in SQLite.
+
+mod migrations;
+
+use std::collections::HashMap;
+use std::fmt;
+use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use rusqlite::{Connection, OptionalExtension, params};
+
+use crate::source::SourcePath;
+
+/// Fraction of a file that must be played before it counts as watched,
+/// unless changed with [`Store::set_watched_threshold`].
+pub const DEFAULT_WATCHED_THRESHOLD: f64 = 0.9;
+
+const KEY_WATCHED_THRESHOLD: &str = "watched_threshold";
+
+/// Storage error.
+#[derive(Debug)]
+pub enum StorageError {
+    Sqlite(rusqlite::Error),
+    Migration(rusqlite_migration::Error),
+    /// A stored path could not be parsed.
+    Corrupt(String),
+}
+
+impl fmt::Display for StorageError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Sqlite(e) => write!(f, "database error: {e}"),
+            Self::Migration(e) => write!(f, "database migration failed: {e}"),
+            Self::Corrupt(e) => write!(f, "invalid data in database: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for StorageError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Sqlite(e) => Some(e),
+            Self::Migration(e) => Some(e),
+            Self::Corrupt(_) => None,
+        }
+    }
+}
+
+impl From<rusqlite::Error> for StorageError {
+    fn from(e: rusqlite::Error) -> Self {
+        Self::Sqlite(e)
+    }
+}
+
+impl From<rusqlite_migration::Error> for StorageError {
+    fn from(e: rusqlite_migration::Error) -> Self {
+        Self::Migration(e)
+    }
+}
+
+pub type Result<T> = std::result::Result<T, StorageError>;
+
+/// Id of a saved source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SourceId(pub i64);
+
+/// A saved source, as stored. `kind` says which [`Source`](crate::source::Source)
+/// implementation to build (e.g. `"local"`), `location` how to reach it
+/// (e.g. a folder path or URL).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SavedSource {
+    pub id: SourceId,
+    pub kind: String,
+    pub name: String,
+    pub location: String,
+}
+
+/// Playback state of one file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WatchState {
+    /// Last saved position in seconds, if any.
+    pub position: Option<f64>,
+    /// Duration in seconds, if known.
+    pub duration: Option<f64>,
+    pub watched: bool,
+}
+
+impl WatchState {
+    /// Started but not finished: there is a position and it is not watched.
+    pub fn in_progress(&self) -> bool {
+        !self.watched && self.position.is_some_and(|p| p > 0.0)
+    }
+}
+
+/// Whether `position` of `duration` counts as watched at `threshold`.
+pub fn reaches_threshold(position: f64, duration: Option<f64>, threshold: f64) -> bool {
+    match duration {
+        Some(d) if d > 0.0 => position / d >= threshold,
+        _ => false,
+    }
+}
+
+fn now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
+}
+
+/// The Enthuse database.
+pub struct Store {
+    conn: Connection,
+}
+
+impl Store {
+    /// Opens (creating if needed) the database at `path` and migrates it to
+    /// the latest schema.
+    pub fn open(path: &Path) -> Result<Self> {
+        if let Some(dir) = path.parent() {
+            // Let SQLite report the real error if this fails.
+            let _ = std::fs::create_dir_all(dir);
+        }
+        Self::init(Connection::open(path)?)
+    }
+
+    /// An empty in-memory database, for tests.
+    pub fn open_in_memory() -> Result<Self> {
+        Self::init(Connection::open_in_memory()?)
+    }
+
+    fn init(mut conn: Connection) -> Result<Self> {
+        conn.pragma_update(None, "foreign_keys", true)?;
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        migrations::migrations().to_latest(&mut conn)?;
+        Ok(Self { conn })
+    }
+
+    // Sources
+
+    /// Saves a source, or returns the existing one with the same kind and
+    /// location (renaming it to `name`).
+    pub fn add_source(&self, kind: &str, name: &str, location: &str) -> Result<SourceId> {
+        let id = self.conn.query_row(
+            "INSERT INTO sources (kind, name, location, created_at) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT (kind, location) DO UPDATE SET name = excluded.name
+             RETURNING id",
+            params![kind, name, location, now()],
+            |r| r.get(0),
+        )?;
+        Ok(SourceId(id))
+    }
+
+    /// All saved sources, oldest first.
+    pub fn sources(&self) -> Result<Vec<SavedSource>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, kind, name, location FROM sources ORDER BY created_at, id")?;
+        let rows = stmt.query_map([], |r| {
+            Ok(SavedSource {
+                id: SourceId(r.get(0)?),
+                kind: r.get(1)?,
+                name: r.get(2)?,
+                location: r.get(3)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Removes a source and all its watch state.
+    pub fn remove_source(&self, id: SourceId) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM sources WHERE id = ?1", [id.0])?;
+        Ok(())
+    }
+
+    // Watch state
+
+    /// The state of one file, or `None` if it was never played.
+    pub fn watch_state(&self, source: SourceId, path: &SourcePath) -> Result<Option<WatchState>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT position, duration, watched FROM watch_state
+                 WHERE source_id = ?1 AND path = ?2",
+                params![source.0, path.as_str()],
+                |r| {
+                    Ok(WatchState {
+                        position: r.get(0)?,
+                        duration: r.get(1)?,
+                        watched: r.get(2)?,
+                    })
+                },
+            )
+            .optional()?)
+    }
+
+    /// States of all played files directly inside `folder`, keyed by path,
+    /// for showing markers in the browser.
+    pub fn folder_states(
+        &self,
+        source: SourceId,
+        folder: &SourcePath,
+    ) -> Result<HashMap<SourcePath, WatchState>> {
+        // Paths are stored '/'-separated, so a folder's direct children are
+        // "folder/name" without a further '/'. Filter in Rust to keep LIKE
+        // escaping out of the picture.
+        let prefix = if folder.is_root() {
+            String::new()
+        } else {
+            format!("{}/", folder.as_str())
+        };
+        let mut stmt = self.conn.prepare(
+            "SELECT path, position, duration, watched FROM watch_state
+             WHERE source_id = ?1 AND substr(path, 1, ?2) = ?3",
+        )?;
+        let rows = stmt.query_map(
+            params![source.0, prefix.chars().count() as i64, prefix],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    WatchState {
+                        position: r.get(1)?,
+                        duration: r.get(2)?,
+                        watched: r.get(3)?,
+                    },
+                ))
+            },
+        )?;
+        let mut out = HashMap::new();
+        for row in rows {
+            let (path, state) = row?;
+            if path[prefix.len()..].contains('/') {
+                continue; // Deeper than a direct child.
+            }
+            let path =
+                SourcePath::parse(&path).map_err(|e| StorageError::Corrupt(e.to_string()))?;
+            out.insert(path, state);
+        }
+        Ok(out)
+    }
+
+    /// Saves the playback position of a file. Marks it watched once the
+    /// position passes the watched threshold.
+    pub fn save_position(
+        &self,
+        source: SourceId,
+        path: &SourcePath,
+        position: f64,
+        duration: Option<f64>,
+    ) -> Result<()> {
+        let position = position.max(0.0);
+        let watched = reaches_threshold(position, duration, self.watched_threshold()?);
+        self.conn.execute(
+            "INSERT INTO watch_state (source_id, path, position, duration, watched, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT (source_id, path) DO UPDATE SET
+                position = excluded.position,
+                duration = COALESCE(excluded.duration, duration),
+                watched = watched OR excluded.watched,
+                updated_at = excluded.updated_at",
+            params![source.0, path.as_str(), position, duration, watched, now()],
+        )?;
+        Ok(())
+    }
+
+    /// Marks a file watched or unwatched. Either way the saved position is
+    /// cleared, so the next play starts from the beginning.
+    pub fn set_watched(&self, source: SourceId, path: &SourcePath, watched: bool) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO watch_state (source_id, path, position, duration, watched, updated_at)
+             VALUES (?1, ?2, NULL, NULL, ?3, ?4)
+             ON CONFLICT (source_id, path) DO UPDATE SET
+                position = NULL, watched = excluded.watched, updated_at = excluded.updated_at",
+            params![source.0, path.as_str(), watched, now()],
+        )?;
+        Ok(())
+    }
+
+    // Settings
+
+    /// Fraction of a file that must be played to count as watched.
+    pub fn watched_threshold(&self) -> Result<f64> {
+        let value: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = ?1",
+                [KEY_WATCHED_THRESHOLD],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(value
+            .and_then(|v| v.parse::<f64>().ok())
+            .filter(|v| (0.0..=1.0).contains(v))
+            .unwrap_or(DEFAULT_WATCHED_THRESHOLD))
+    }
+
+    pub fn set_watched_threshold(&self, threshold: f64) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            params![KEY_WATCHED_THRESHOLD, threshold.clamp(0.0, 1.0).to_string()],
+        )?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn p(s: &str) -> SourcePath {
+        SourcePath::parse(s).unwrap()
+    }
+
+    fn store() -> Store {
+        Store::open_in_memory().unwrap()
+    }
+
+    #[test]
+    fn sources_roundtrip_and_dedupe() {
+        let s = store();
+        let a = s.add_source("local", "Movies", "/media/movies").unwrap();
+        let b = s.add_source("local", "TV", r"\\nas\tv").unwrap();
+        let a2 = s.add_source("local", "Films", "/media/movies").unwrap();
+        assert_eq!(a, a2);
+        assert_ne!(a, b);
+
+        let all = s.sources().unwrap();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].name, "Films");
+        assert_eq!(all[1].location, r"\\nas\tv");
+
+        s.remove_source(a).unwrap();
+        assert_eq!(s.sources().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn removing_source_removes_its_state() {
+        let s = store();
+        let src = s.add_source("local", "M", "/m").unwrap();
+        s.save_position(src, &p("a.mkv"), 10.0, Some(100.0))
+            .unwrap();
+        s.remove_source(src).unwrap();
+        let src2 = s.add_source("local", "M", "/m").unwrap();
+        assert_eq!(s.watch_state(src2, &p("a.mkv")).unwrap(), None);
+    }
+
+    #[test]
+    fn position_saves_and_marks_watched_at_threshold() {
+        let s = store();
+        let src = s.add_source("local", "M", "/m").unwrap();
+        let f = p("Show/Ep 1.mkv");
+        assert_eq!(s.watch_state(src, &f).unwrap(), None);
+
+        s.save_position(src, &f, 60.0, Some(1000.0)).unwrap();
+        let st = s.watch_state(src, &f).unwrap().unwrap();
+        assert_eq!(st.position, Some(60.0));
+        assert!(!st.watched);
+        assert!(st.in_progress());
+
+        s.save_position(src, &f, 900.0, Some(1000.0)).unwrap();
+        let st = s.watch_state(src, &f).unwrap().unwrap();
+        assert!(st.watched);
+        assert!(!st.in_progress());
+
+        // Seeking back later does not unmark it.
+        s.save_position(src, &f, 5.0, None).unwrap();
+        let st = s.watch_state(src, &f).unwrap().unwrap();
+        assert!(st.watched);
+        assert_eq!(
+            st.duration,
+            Some(1000.0),
+            "unknown duration keeps the old one"
+        );
+    }
+
+    #[test]
+    fn set_watched_clears_position() {
+        let s = store();
+        let src = s.add_source("local", "M", "/m").unwrap();
+        let f = p("a.mkv");
+        s.save_position(src, &f, 300.0, Some(1000.0)).unwrap();
+        s.set_watched(src, &f, true).unwrap();
+        let st = s.watch_state(src, &f).unwrap().unwrap();
+        assert!(st.watched);
+        assert_eq!(st.position, None);
+
+        s.set_watched(src, &f, false).unwrap();
+        assert!(!s.watch_state(src, &f).unwrap().unwrap().watched);
+        // Marking an unplayed file works too.
+        s.set_watched(src, &p("b.mkv"), true).unwrap();
+        assert!(s.watch_state(src, &p("b.mkv")).unwrap().unwrap().watched);
+    }
+
+    #[test]
+    fn folder_states_only_direct_children() {
+        let s = store();
+        let src = s.add_source("local", "M", "/m").unwrap();
+        let other = s.add_source("local", "O", "/o").unwrap();
+        s.save_position(src, &p("TV/a.mkv"), 1.0, None).unwrap();
+        s.save_position(src, &p("TV/Season 1/b.mkv"), 1.0, None)
+            .unwrap();
+        s.save_position(src, &p("TV2/c.mkv"), 1.0, None).unwrap();
+        s.save_position(src, &p("root.mkv"), 1.0, None).unwrap();
+        s.save_position(other, &p("TV/d.mkv"), 1.0, None).unwrap();
+
+        let tv = s.folder_states(src, &p("TV")).unwrap();
+        assert_eq!(
+            tv.keys().map(|k| k.as_str()).collect::<Vec<_>>(),
+            ["TV/a.mkv"]
+        );
+
+        let root = s.folder_states(src, &SourcePath::root()).unwrap();
+        assert_eq!(
+            root.keys().map(|k| k.as_str()).collect::<Vec<_>>(),
+            ["root.mkv"]
+        );
+    }
+
+    #[test]
+    fn non_ascii_paths() {
+        let s = store();
+        let src = s.add_source("local", "M", "/m").unwrap();
+        s.save_position(src, &p("Ødland/Æble 1.mkv"), 1.0, None)
+            .unwrap();
+        let st = s.folder_states(src, &p("Ødland")).unwrap();
+        assert!(st.contains_key(&p("Ødland/Æble 1.mkv")));
+    }
+
+    #[test]
+    fn watched_threshold_setting() {
+        let s = store();
+        assert_eq!(s.watched_threshold().unwrap(), DEFAULT_WATCHED_THRESHOLD);
+        s.set_watched_threshold(0.8).unwrap();
+        assert_eq!(s.watched_threshold().unwrap(), 0.8);
+        s.set_watched_threshold(5.0).unwrap();
+        assert_eq!(s.watched_threshold().unwrap(), 1.0);
+
+        let src = s.add_source("local", "M", "/m").unwrap();
+        s.set_watched_threshold(0.5).unwrap();
+        s.save_position(src, &p("a.mkv"), 50.0, Some(100.0))
+            .unwrap();
+        assert!(s.watch_state(src, &p("a.mkv")).unwrap().unwrap().watched);
+    }
+
+    #[test]
+    fn threshold_needs_known_duration() {
+        assert!(!reaches_threshold(100.0, None, 0.9));
+        assert!(!reaches_threshold(100.0, Some(0.0), 0.9));
+        assert!(reaches_threshold(90.0, Some(100.0), 0.9));
+        assert!(!reaches_threshold(89.9, Some(100.0), 0.9));
+    }
+
+    #[test]
+    fn reopening_file_database_keeps_data() {
+        let dir = std::env::temp_dir().join(format!("enthuse-db-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let db = dir.join("nested").join("enthuse.db");
+        {
+            let s = Store::open(&db).unwrap();
+            let src = s.add_source("local", "M", "/m").unwrap();
+            s.save_position(src, &p("a.mkv"), 42.0, None).unwrap();
+        }
+        let s = Store::open(&db).unwrap();
+        let src = s.sources().unwrap()[0].id;
+        assert_eq!(
+            s.watch_state(src, &p("a.mkv")).unwrap().unwrap().position,
+            Some(42.0)
+        );
+        drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
