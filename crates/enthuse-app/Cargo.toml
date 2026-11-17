@@ -1,0 +1,18 @@
+[package]
+name = "enthuse-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "enthuse"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+enthuse-core.workspace = true
+enthuse-player.workspace = true
