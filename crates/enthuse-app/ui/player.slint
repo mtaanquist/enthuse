@@ -61,6 +61,14 @@ export global PlayerModel {
     callback next();
     callback toggle-fullscreen();
     callback retry();
+
+    // Up next card (docs/ui.md, UpNextCard).
+    in property <bool> up-next-visible;
+    in property <int> up-next-seconds;
+    // "S02E06 Lantern Rock"
+    in property <string> up-next-title;
+    callback up-next-play();
+    callback up-next-cancel();
 }
 
 // Played, buffered and the thumb; tap or drag to seek.
@@ -264,6 +272,81 @@ component MenuHeading inherits Rectangle {
         font-size: Theme.meta-size;
         font-weight: Theme.body-strong-weight;
         vertical-alignment: center;
+    }
+}
+
+// The next file in the folder and a countdown, top right under the header
+// so it never covers subtitles.
+component UpNextCard inherits Rectangle {
+    border-radius: Theme.radius-overlay;
+    background: Theme.overlay-card;
+    border-width: 1px;
+    border-color: Theme.line-strong;
+    drop-shadow-blur: 24px;
+    drop-shadow-color: rgba(0, 0, 0, 0.45);
+    height: card.preferred-height;
+    accessible-role: groupbox;
+    accessible-label: "Up next in " + PlayerModel.up-next-seconds + " seconds: " + PlayerModel.up-next-title;
+
+    // Swallow taps, so a tap on the card does not reach the video below.
+    TouchArea { }
+
+    card := HorizontalLayout {
+        padding: Theme.space-16;
+        spacing: Theme.space-16;
+
+        // Thumbnail slot (#68). Left out when narrow, so the buttons fit.
+        if root.width >= 340px: Rectangle {
+            width: 96px;
+            height: 54px;
+            y: (parent.height - self.height) / 2;
+            border-radius: Theme.radius-small;
+            background: Theme.surface-raised;
+
+            Image {
+                width: Theme.icon-size;
+                height: Theme.icon-size;
+                source: Icons.video;
+                colorize: Theme.text-faint;
+            }
+        }
+
+        VerticalLayout {
+            spacing: Theme.space-4;
+            alignment: center;
+
+            Text {
+                text: "Up next in " + PlayerModel.up-next-seconds + " s";
+                color: Theme.text-muted;
+                font-size: Theme.meta-size;
+            }
+
+            Text {
+                text: PlayerModel.up-next-title;
+                color: Theme.text;
+                font-size: Theme.body-size;
+                font-weight: Theme.body-strong-weight;
+                overflow: elide;
+            }
+
+            HorizontalLayout {
+                padding-top: Theme.space-8;
+                spacing: Theme.space-8;
+                alignment: start;
+
+                PillButton {
+                    variant: ButtonVariant.primary;
+                    text: "Play now";
+                    clicked => { PlayerModel.up-next-play(); }
+                }
+
+                PillButton {
+                    variant: ButtonVariant.overlay;
+                    text: "Cancel";
+                    clicked => { PlayerModel.up-next-cancel(); }
+                }
+            }
+        }
     }
 }
 
@@ -586,6 +669,13 @@ export component PlayerPage inherits Rectangle {
                 }
             }
         }
+    }
+
+    // Hidden while a menu is open, so it never covers one.
+    if PlayerModel.up-next-visible && root.message == "" && PlayerModel.menu == 0: UpNextCard {
+        width: min(360px, root.width - 2 * root.pad);
+        x: root.width - self.width - root.pad;
+        y: top.height;
     }
 
     // Playback error: the message with Retry and Back.

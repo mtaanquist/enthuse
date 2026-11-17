@@ -172,6 +172,85 @@ pub fn progress(state: &WatchState) -> f64 {
     }
 }
 
+/// The episode line for a file: the episode code and the episode's own
+/// title when the name has one after the number ("S02E06 Lantern Rock" for
+/// `Harbor Lights - S02E06 - Lantern Rock.mkv`), or the code alone. Release
+/// tags such as `1080p` end the title. Empty when there is no episode.
+pub fn episode_label(file_name: &str) -> String {
+    let Some(episode) = parse_episode(file_name) else {
+        return String::new();
+    };
+    let stem = if crate::source::is_video_file(file_name) {
+        file_name
+            .rsplit_once('.')
+            .map_or(file_name, |(stem, _)| stem)
+    } else {
+        file_name
+    };
+    let mut words: Vec<&str> = stem
+        .split([' ', '.', '_'])
+        .filter(|w| !w.is_empty())
+        .collect();
+    // The fewest words, from the episode's first word, that still parse.
+    let title = episode_start(stem)
+        .and_then(|at| {
+            // Byte offset of each word within `stem`.
+            let offset = |w: &str| w.as_ptr() as usize - stem.as_ptr() as usize;
+            // The word holding the number's start (`Show-S01E02` holds it too).
+            let first = words.iter().rposition(|w| offset(w) <= at)?;
+            let end = (first + 1..=words.len())
+                .find(|&end| parse_episode(&words[first..end].join(" ")).is_some())?;
+            // A title joined to the number by a dash: `S01E02-Pilot`.
+            let last = words[end - 1];
+            if let Some(dash) = last.find(is_dash).filter(|&i| i > 0) {
+                let mut head = words[first..end - 1].to_vec();
+                head.push(&last[..dash]);
+                if parse_episode(&head.join(" ")).is_some() {
+                    words[end - 1] = &last[dash..];
+                    return Some(end - 1);
+                }
+            }
+            Some(end)
+        })
+        .map(|end| {
+            words[end..]
+                .iter()
+                .skip_while(|w| w.chars().all(is_dash))
+                .take_while(|w| !is_release_tag(w))
+                .copied()
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .unwrap_or_default();
+    let title = title.trim_matches(|c: char| is_dash(c) || c == ' ');
+    if title.is_empty() {
+        episode.code()
+    } else {
+        format!("{} {title}", episode.code())
+    }
+}
+
+/// Hyphen, en dash or em dash.
+fn is_dash(c: char) -> bool {
+    matches!(c, '-' | '\u{2013}' | '\u{2014}')
+}
+
+/// Release tags that follow the title in file names: `1080p`, `x264`,
+/// `WEB-DL`, `[group]` and the like.
+fn is_release_tag(word: &str) -> bool {
+    let w = word.to_ascii_lowercase();
+    let resolution =
+        w.ends_with('p') && w.len() > 3 && w[..w.len() - 1].bytes().all(|b| b.is_ascii_digit());
+    resolution
+        || w.starts_with('[')
+        || w.starts_with('(')
+        || [
+            "x264", "x265", "h264", "h265", "hevc", "av1", "web", "web-dl", "webrip", "bluray",
+            "bdrip", "hdtv", "dvdrip", "remux", "hdr", "10bit", "proper", "repack", "multi",
+        ]
+        .contains(&w.as_str())
+}
+
 /// Byte index where the episode number starts in `name`, if it has one.
 fn episode_start(name: &str) -> Option<usize> {
     parse_episode(name)?;
@@ -473,6 +552,30 @@ mod tests {
         assert_eq!(display_title("E06 Lantern Rock.mkv"), "E06 Lantern Rock");
         assert_eq!(display_title("Field_Notes_2x03.mp4"), "Field Notes");
         assert_eq!(display_title("no extension"), "no extension");
+    }
+
+    #[test]
+    fn episode_labels() {
+        assert_eq!(
+            episode_label("Harbor Lights - S02E06 - Lantern Rock.mkv"),
+            "S02E06 Lantern Rock"
+        );
+        assert_eq!(
+            episode_label("Harbor.Lights.S02E05.The.Long.Tide.1080p.WEB-DL.mkv"),
+            "S02E05 The Long Tide"
+        );
+        assert_eq!(episode_label("Harbor.Lights.S02E05.1080p.mkv"), "S02E05");
+        assert_eq!(episode_label("Field_Notes_2x03.mp4"), "S02E03");
+        assert_eq!(episode_label("Show - Episode 6 - Pilot.mkv"), "E06 Pilot");
+        assert_eq!(episode_label("Some Film (2019).mkv"), "");
+        // A last word that is not a video extension is part of the title.
+        assert_eq!(episode_label("Show.S01E02.End"), "S01E02 End");
+        assert_eq!(episode_label("Show - S01E02-Pilot.mkv"), "S01E02 Pilot");
+        assert_eq!(episode_label("Show-S01E02 Title.mkv"), "S01E02 Title");
+        assert_eq!(
+            episode_label("Show \u{2013} S01E02 \u{2013} Pilot.mkv"),
+            "S01E02 Pilot"
+        );
     }
 
     #[test]
