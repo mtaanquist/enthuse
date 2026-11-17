@@ -503,6 +503,107 @@ component BrowserPage inherits Rectangle {
 
 // Invisible strip along the PiP window's edge or corner that starts an OS resize
 // in `direction` (0 = north, then clockwise to 7 = north-west).
+// Playback controls for the browser window, so the PiP video can be
+// controlled while browsing for something else.
+component NowPlayingBar inherits Rectangle {
+    in property <bool> paused;
+    in property <float> position;
+    in property <float> duration;
+    in property <string> position-text;
+    in property <string> duration-text;
+    in property <string> title;
+    in property <string> message;
+    callback toggle-pause();
+    callback seek(float);
+    callback seek-relative(float);
+    callback show-video();
+    callback stop();
+
+    height: Layout.bar-height + 28px;
+    background: #0c0f12;
+
+    Rectangle {
+        y: 0;
+        height: 1px;
+        background: #ffffff18;
+    }
+
+    Text {
+        x: Layout.gutter;
+        y: 10px;
+        width: time.x - self.x - Layout.gutter;
+        height: 20px;
+        text: root.message != "" ? root.message : root.title;
+        color: root.message != "" ? Palette.error : Palette.text;
+        font-size: 15px;
+        font-weight: 600;
+        overflow: elide;
+        vertical-alignment: center;
+    }
+
+    time := Text {
+        x: parent.width - self.width - Layout.gutter;
+        y: 10px;
+        width: 130px;
+        height: 20px;
+        text: root.position-text + " / " + root.duration-text;
+        color: Palette.muted;
+        font-size: 14px;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+    }
+
+    controls := Rectangle {
+        y: 28px;
+        height: Layout.bar-height;
+
+        back10 := IconButton {
+            x: Layout.gutter;
+            y: (parent.height - self.height) / 2;
+            label: "-10";
+            clicked => { root.seek-relative(-10); }
+        }
+
+        play := IconButton {
+            x: back10.x + back10.width + Layout.gutter / 2;
+            y: (parent.height - self.height) / 2;
+            primary: true;
+            label: root.paused ? "Play" : "Pause";
+            clicked => { root.toggle-pause(); }
+        }
+
+        fwd10 := IconButton {
+            x: play.x + play.width + Layout.gutter / 2;
+            y: (parent.height - self.height) / 2;
+            label: "+10";
+            clicked => { root.seek-relative(10); }
+        }
+
+        stop := IconButton {
+            x: parent.width - self.width - Layout.gutter;
+            y: (parent.height - self.height) / 2;
+            label: "Stop";
+            clicked => { root.stop(); }
+        }
+
+        video := PillButton {
+            x: stop.x - self.width - Layout.gutter / 2;
+            y: (parent.height - self.height) / 2;
+            label: "Back to video";
+            clicked => { root.show-video(); }
+        }
+
+        SeekBar {
+            x: fwd10.x + fwd10.width + Layout.gutter;
+            width: max(0px, video.x - self.x - Layout.gutter);
+            y: (parent.height - self.height) / 2;
+            position: root.position;
+            duration: root.duration;
+            seek(t) => { root.seek(t); }
+        }
+    }
+}
+
 component ResizeHandle inherits TouchArea {
     in property <int> direction;
     // Direction and the press point in window coordinates.
@@ -759,7 +860,7 @@ export component BrowserWindow inherits Window {
     preferred-width: 640px;
     preferred-height: 480px;
     min-width: 360px;
-    min-height: 270px;
+    min-height: 360px;
     background: Palette.page;
     forward-focus: keys;
 
@@ -776,6 +877,20 @@ export component BrowserWindow inherits Window {
     callback browser-remove(int);
     callback add-source(string);
 
+    // The video playing in the PiP window.
+    in property <bool> paused;
+    in property <float> position;
+    in property <float> duration;
+    in property <string> position-text: "0:00";
+    in property <string> duration-text: "0:00";
+    in property <string> video-title;
+    in property <string> message;
+    callback toggle-pause();
+    callback seek(float);
+    callback seek-relative(float);
+    callback show-video();
+    callback stop();
+
     keys := FocusScope {
         key-pressed(e) => {
             if (e.text == Key.Escape || e.text == Key.Backspace) {
@@ -785,19 +900,36 @@ export component BrowserWindow inherits Window {
             reject
         }
 
-        BrowserPage {
-            heading: root.browser-heading;
-            can-go-up: root.browser-can-go-up;
-            at-sources: root.browser-at-sources;
-            items: root.browser-items;
-            loading: root.browser-loading;
-            error: root.browser-error;
-            resume-label: root.browser-resume-label;
-            cycle-resume => { root.browser-cycle-resume(); }
-            up => { root.browser-up(); }
-            activate(i) => { root.browser-activate(i); }
-            remove(i) => { root.browser-remove(i); }
-            add-source(path) => { root.add-source(path); }
+        VerticalLayout {
+            BrowserPage {
+                heading: root.browser-heading;
+                can-go-up: root.browser-can-go-up;
+                at-sources: root.browser-at-sources;
+                items: root.browser-items;
+                loading: root.browser-loading;
+                error: root.browser-error;
+                resume-label: root.browser-resume-label;
+                cycle-resume => { root.browser-cycle-resume(); }
+                up => { root.browser-up(); }
+                activate(i) => { root.browser-activate(i); }
+                remove(i) => { root.browser-remove(i); }
+                add-source(path) => { root.add-source(path); }
+            }
+
+            NowPlayingBar {
+                paused: root.paused;
+                position: root.position;
+                duration: root.duration;
+                position-text: root.position-text;
+                duration-text: root.duration-text;
+                title: root.video-title;
+                message: root.message;
+                toggle-pause => { root.toggle-pause(); }
+                seek(t) => { root.seek(t); }
+                seek-relative(d) => { root.seek-relative(d); }
+                show-video => { root.show-video(); }
+                stop => { root.stop(); }
+            }
         }
     }
 }
