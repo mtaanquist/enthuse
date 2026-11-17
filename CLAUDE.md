@@ -2,6 +2,8 @@
 
 Infuse-style media player for Windows and Linux. Browse folders on local disks and network shares, play with libmpv, resume where you left off, and continue automatically to the next file in the folder.
 
+See `docs/design.md` for the reasoning behind these choices, rejected options and the rough plan.
+
 ## Stack
 
 - Rust (stable, edition 2024), Cargo workspace.
