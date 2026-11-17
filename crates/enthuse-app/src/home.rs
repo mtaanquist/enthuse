@@ -82,7 +82,7 @@ impl Home {
         });
         wire_callbacks!(window, this);
         let weak = Rc::downgrade(&this);
-        this.browser.set_change_handler(Box::new(move || {
+        this.browser.add_change_handler(Box::new(move || {
             if let Some(home) = weak.upgrade() {
                 home.refresh();
             }

@@ -156,6 +156,7 @@ component SwitchRow inherits Rectangle {
     behavior := ButtonBehavior {
         ring-radius: 0;
         show-ring: false;
+        keep-focus: true;
         clicked => { root.toggled(!root.on); }
     }
 }
@@ -205,6 +206,7 @@ component TextSegments inherits Rectangle {
 
             behavior := ButtonBehavior {
                 ring-radius: parent.border-radius;
+                keep-focus: true;
                 clicked => { root.select(index); }
             }
         }
@@ -226,6 +228,7 @@ component Stepper inherits HorizontalLayout {
         icon: Icons.minus;
         label: "Less " + root.label;
         enabled: root.can-down;
+        keep-focus: true;
         clicked => { root.step(-1); }
     }
 
@@ -245,6 +248,7 @@ component Stepper inherits HorizontalLayout {
         icon: Icons.add;
         label: "More " + root.label;
         enabled: root.can-up;
+        keep-focus: true;
         clicked => { root.step(1); }
     }
 }

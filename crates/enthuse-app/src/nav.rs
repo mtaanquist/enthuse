@@ -30,6 +30,9 @@ struct Current {
     duration: Option<f64>,
     schedule: SaveSchedule,
     up_next: UpNext,
+    /// The player opened the file. An error before that means it could not
+    /// be played at all: the browser shows again with a toast.
+    loaded: bool,
 }
 
 pub struct Nav {
@@ -145,7 +148,11 @@ impl Nav {
                 } else {
                     None
                 };
-                self.playback.open(&url, path.name().unwrap_or(&url), start);
+                if let Err(err) = self.playback.open(&url, path.name().unwrap_or(&url), start) {
+                    self.show_browser();
+                    self.browser.show_error(&cannot_play(&path, &err));
+                    return;
+                }
                 *self.next.borrow_mut() = None;
                 self.show_up_next(UpNextState::Hidden);
                 self.find_next(&source, &path);
@@ -155,13 +162,14 @@ impl Nav {
                     duration: state.and_then(|s| s.duration),
                     schedule: SaveSchedule::new(start),
                     up_next: UpNext::new(),
+                    loaded: false,
                 });
                 w.set_page(PAGE_PLAYER);
             }
             Err(err) => {
                 self.show_browser();
                 self.browser
-                    .show_error(&format!("Cannot play this file: {err}"));
+                    .show_error(&cannot_play(&path, &err.to_string()));
             }
         }
     }
@@ -339,6 +347,26 @@ impl Nav {
                 };
                 self.show_up_next(up_next);
             }
+            PlayerEvent::FileLoaded => {
+                if let Some(current) = self.current.borrow_mut().as_mut() {
+                    current.loaded = true;
+                }
+            }
+            PlayerEvent::Ended(EndReason::Error(err)) => {
+                // Failed to open (missing, unreadable): back to where the
+                // user was, with the reason. Errors mid-file keep the
+                // player's overlay with Retry and Back.
+                let path = self
+                    .current
+                    .borrow()
+                    .as_ref()
+                    .filter(|c| !c.loaded)
+                    .map(|c| c.path.clone());
+                if let Some(path) = path {
+                    self.show_browser();
+                    self.browser.show_error(&cannot_play(&path, err));
+                }
+            }
             PlayerEvent::PauseChanged(true) => self.save_position(),
             PlayerEvent::Ended(EndReason::EndOfFile) => self.finished(),
             _ => {}
@@ -457,4 +485,17 @@ impl Nav {
             },
         );
     }
+}
+
+/// The toast for a file that would not play: "Couldn't play S02E05: <why>",
+/// with the episode when the name has one, else the title.
+fn cannot_play(path: &SourcePath, reason: &str) -> String {
+    let name = path.name().unwrap_or_default();
+    let label = episode_label(name);
+    let what = if label.is_empty() {
+        display_title(name)
+    } else {
+        label
+    };
+    format!("Couldn't play {what}: {reason}")
 }

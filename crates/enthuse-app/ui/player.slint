@@ -61,6 +61,9 @@ export global PlayerModel {
     callback select-audio(int);
     callback next();
     callback toggle-fullscreen();
+    // The window changed size, e.g. full screen turned on or off from
+    // outside the app: Rust syncs `fullscreen` and the subtitle position.
+    callback resized();
     callback retry();
 
     // Up next card (docs/ui.md, UpNextCard).

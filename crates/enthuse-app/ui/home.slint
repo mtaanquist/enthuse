@@ -2,9 +2,10 @@
 // Rust fills HomeModel for each window; the screen only displays it.
 
 import { ScrollView } from "std-widgets.slint";
-import { Theme, Icons } from "theme.slint";
+import { Theme, Icons, KeyFocus } from "theme.slint";
 import { ButtonVariant, IconButton, PillButton } from "components/buttons.slint";
-import { ButtonBehavior } from "components/behavior.slint";
+import { ButtonBehavior, FocusGrid } from "components/behavior.slint";
+import { TipText } from "components/tip-text.slint";
 
 export struct ContinueItem {
     title: string,
@@ -52,6 +53,8 @@ component SectionHeading inherits Text {
 component ContinueCard inherits Rectangle {
     in property <ContinueItem> item;
     callback clicked();
+    // See ButtonBehavior.arrow.
+    callback arrow(string) -> bool;
 
     forward-focus: behavior;
     accessible-role: button;
@@ -118,12 +121,11 @@ component ContinueCard inherits Rectangle {
         VerticalLayout {
             spacing: 2px;
 
-            Text {
+            TipText {
                 text: root.item.title;
-                color: Theme.text;
+                hovered: behavior.has-hover;
                 font-size: Theme.body-size;
                 font-weight: Theme.body-strong-weight;
-                overflow: elide;
             }
 
             Text {
@@ -138,6 +140,7 @@ component ContinueCard inherits Rectangle {
     behavior := ButtonBehavior {
         ring-radius: Theme.radius-medium;
         clicked => { root.clicked(); }
+        arrow(k) => { return root.arrow(k); }
     }
 }
 
@@ -145,6 +148,7 @@ component SourceTile inherits Rectangle {
     in property <SourceTileItem> item;
     callback clicked();
     callback remove();
+    callback arrow(string) -> bool;
 
     height: 84px;
     border-radius: Theme.radius-large;
@@ -187,19 +191,20 @@ component SourceTile inherits Rectangle {
             spacing: 2px;
             horizontal-stretch: 1;
 
-            Text {
+            name := TipText {
                 text: root.item.name;
-                color: Theme.text;
+                hovered: behavior.has-hover;
                 font-size: Theme.body-size;
                 font-weight: Theme.body-strong-weight;
-                overflow: elide;
             }
 
-            Text {
+            // Long paths: the full one in the tooltip, unless the name is
+            // cut too (one tip at a time).
+            TipText {
                 text: root.item.detail;
-                color: Theme.text-muted;
+                hovered: behavior.has-hover && !name.cut;
+                text-color: Theme.text-muted;
                 font-size: Theme.label-size;
-                overflow: elide;
             }
         }
 
@@ -229,6 +234,7 @@ component SourceTile inherits Rectangle {
     behavior := ButtonBehavior {
         ring-radius: Theme.radius-large;
         clicked => { root.clicked(); }
+        arrow(k) => { return root.arrow(k); }
     }
 
     more := IconButton {
@@ -300,6 +306,36 @@ component SourceTile inherits Rectangle {
 export component HomePage inherits Rectangle {
     callback open-source(int);
 
+    // Arrow keys move within the cards and within the tiles; Up from the
+    // tiles goes to the cards and Down from the cards to the tiles. The
+    // item to focus is asked for by bumping the serial.
+    property <int> focus-group; // 0 cards, 1 tiles
+    property <int> focus-target: -1;
+    property <int> focus-serial;
+    property <int> first-serial: KeyFocus.first-serial;
+    changed first-serial => {
+        root.move-to(HomeModel.continue-items.length > 0 ? 0 : 1, 0);
+    }
+
+    function move-to(group: int, target: int) {
+        if (target < 0) {
+            return;
+        }
+        root.focus-group = group;
+        root.focus-target = target;
+        root.focus-serial += 1;
+    }
+
+    // Scrolls so an item `top` from the top of the visible area (negative
+    // when above it) and `h` tall is fully in view.
+    function reveal(top: length, h: length) {
+        if (top < 0) {
+            scroll.content-y = min(0px, scroll.content-y - top + Theme.space-16);
+        } else if (top + h > scroll.visible-height) {
+            scroll.content-y = scroll.content-y - (top + h - scroll.visible-height) - Theme.space-16;
+        }
+    }
+
     property <length> pad: root.width < 700px ? Theme.space-24 : Theme.content-padding-x;
     property <length> gap: Theme.space-24;
 
@@ -344,6 +380,21 @@ export component HomePage inherits Rectangle {
                     height: scroll.card-width * 9 / 16 + 56px;
 
                     for item[index] in HomeModel.continue-items: ContinueCard {
+                        property <int> serial: root.focus-serial;
+                        changed serial => {
+                            if (root.focus-group == 0 && index == root.focus-target) {
+                                root.reveal(self.absolute-position.y - scroll.absolute-position.y, self.height);
+                                self.focus();
+                            }
+                        }
+                        arrow(k) => {
+                            if (k == Key.DownArrow && HomeModel.sources.length > 0) {
+                                root.move-to(1, 0);
+                            } else {
+                                root.move-to(0, FocusGrid.target(index, scroll.card-count, scroll.card-count, k));
+                            }
+                            return true;
+                        }
                         x: index * (scroll.card-width + root.gap);
                         width: scroll.card-width;
                         visible: index < scroll.card-count;
@@ -373,6 +424,21 @@ export component HomePage inherits Rectangle {
                     height: self.rows * 84px + max(0, self.rows - 1) * root.gap;
 
                     for tile[index] in HomeModel.sources: SourceTile {
+                        property <int> serial: root.focus-serial;
+                        changed serial => {
+                            if (root.focus-group == 1 && index == root.focus-target) {
+                                root.reveal(self.absolute-position.y - scroll.absolute-position.y, self.height);
+                                self.focus();
+                            }
+                        }
+                        arrow(k) => {
+                            if (k == Key.UpArrow && index < scroll.tile-columns && HomeModel.continue-items.length > 0) {
+                                root.move-to(0, 0);
+                            } else {
+                                root.move-to(1, FocusGrid.target(index, HomeModel.sources.length, scroll.tile-columns, k));
+                            }
+                            return true;
+                        }
                         x: mod(index, scroll.tile-columns) * (scroll.tile-width + root.gap);
                         y: floor(index / scroll.tile-columns) * (84px + root.gap);
                         width: scroll.tile-width;

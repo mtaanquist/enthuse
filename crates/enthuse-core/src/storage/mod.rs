@@ -223,6 +223,40 @@ impl Store {
         Ok(out)
     }
 
+    /// Files that were played or marked watched, most recent first, with
+    /// when (Unix seconds), for the Recent screen. At most `limit`.
+    pub fn recently_played(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<(SourceId, SourcePath, WatchState, i64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT source_id, path, position, duration, watched, updated_at FROM watch_state
+             WHERE watched = 1 OR position > 0
+             ORDER BY updated_at DESC, rowid DESC
+             LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit as i64], |r| {
+            Ok((
+                SourceId(r.get(0)?),
+                r.get::<_, String>(1)?,
+                WatchState {
+                    position: r.get(2)?,
+                    duration: r.get(3)?,
+                    watched: r.get(4)?,
+                },
+                r.get::<_, i64>(5)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (source, path, state, at) = row?;
+            let path =
+                SourcePath::parse(&path).map_err(|e| StorageError::Corrupt(e.to_string()))?;
+            out.push((source, path, state, at));
+        }
+        Ok(out)
+    }
+
     /// States of all played files directly inside `folder`, keyed by path,
     /// for showing markers in the browser.
     pub fn folder_states(
@@ -721,6 +755,27 @@ mod tests {
         s.save_position(src, &p("c.mkv"), 9_720.0, Some(10_800.0))
             .unwrap();
         assert!(!s.watch_state(src, &p("c.mkv")).unwrap().unwrap().watched);
+    }
+
+    #[test]
+    fn recently_played_includes_watched_newest_first() {
+        let s = store();
+        let src = s.add_source("local", "M", "/m").unwrap();
+        s.save_progress(src, &p("a.mkv"), 30.0, Some(100.0))
+            .unwrap();
+        s.set_watched(src, &p("b.mkv"), true).unwrap();
+        s.save_progress(src, &p("c.mkv"), 10.0, Some(100.0))
+            .unwrap();
+        // Marked unwatched again, with no position: not listed.
+        s.set_watched(src, &p("c.mkv"), false).unwrap();
+        let recent: Vec<_> = s
+            .recently_played(10)
+            .unwrap()
+            .into_iter()
+            .map(|(_, path, state, _)| (path, state.watched))
+            .collect();
+        assert_eq!(recent, vec![(p("b.mkv"), true), (p("a.mkv"), false)]);
+        assert_eq!(s.recently_played(1).unwrap().len(), 1);
     }
 
     #[test]

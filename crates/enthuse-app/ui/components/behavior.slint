@@ -12,10 +12,17 @@ export component ButtonBehavior {
     // Off when the parent shows keyboard focus itself, e.g. a row inside a
     // clipped card where the ring outside would be cut off.
     in property <bool> show-ring: true;
+    // Keep keyboard focus here after Enter or Space, for buttons that stay
+    // on screen when pressed (steppers, switches). Others hand focus back
+    // to the window, since their action may hide or destroy them.
+    in property <bool> keep-focus;
     out property <bool> has-hover: touch.has-hover;
     out property <bool> pressed: touch.pressed;
     out property <bool> keyboard-focus;
     callback clicked();
+    // An arrow key while focused (Key.UpArrow and so on). Lists and grids
+    // move focus with it; return true when the key was used.
+    callback arrow(string) -> bool;
 
     width: 100%;
     height: 100%;
@@ -41,7 +48,8 @@ export component ButtonBehavior {
         enabled: root.enabled;
         focus-on-click: false;
         focus-gained(reason) => {
-            root.keyboard-focus = reason == FocusReason.tab-navigation;
+            // Programmatic focus comes from arrow keys (lists and grids).
+            root.keyboard-focus = reason == FocusReason.tab-navigation || reason == FocusReason.programmatic;
         }
         focus-lost(reason) => {
             root.keyboard-focus = false;
@@ -50,9 +58,14 @@ export component ButtonBehavior {
             if (event.text == Key.Return || event.text == " ") {
                 // The action may hide or destroy this button, which would
                 // leave no item to receive keys. Hand focus back first.
-                KeyFocus.restore();
+                if (!root.keep-focus) {
+                    KeyFocus.restore();
+                }
                 root.clicked();
                 return accept;
+            }
+            if (event.text == Key.UpArrow || event.text == Key.DownArrow || event.text == Key.LeftArrow || event.text == Key.RightArrow) {
+                return root.arrow(event.text) ? EventResult.accept : EventResult.reject;
             }
             reject
         }
@@ -68,5 +81,31 @@ export component ButtonBehavior {
         border-radius: root.ring-radius + root.ring-outset;
         border-width: Theme.focus-ring-width;
         border-color: Theme.accent;
+    }
+}
+
+// Where an arrow key moves focus in a grid of `count` items with `columns`
+// per row (1 for a list, `count` for a single row): the new index, or -1
+// at an edge or for another key.
+export global FocusGrid {
+    public pure function target(index: int, count: int, columns: int, key: string) -> int {
+        if (key == Key.DownArrow) {
+            return index + columns < count ? index + columns : -1;
+        }
+        if (key == Key.UpArrow) {
+            return index - columns >= 0 ? index - columns : -1;
+        }
+        if (columns > 1 && key == Key.RightArrow) {
+            return index + 1 < count && mod(index + 1, columns) != 0 ? index + 1 : -1;
+        }
+        if (columns > 1 && key == Key.LeftArrow) {
+            return index > 0 && mod(index, columns) != 0 ? index - 1 : -1;
+        }
+        -1
+    }
+
+    // Whether `key` is an arrow key.
+    public pure function is-arrow(key: string) -> bool {
+        key == Key.UpArrow || key == Key.DownArrow || key == Key.LeftArrow || key == Key.RightArrow
     }
 }

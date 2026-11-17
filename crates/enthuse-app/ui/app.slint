@@ -4,16 +4,20 @@ import { Theme, Icons, KeyFocus } from "theme.slint";
 
 export { KeyFocus }
 import { ButtonVariant, IconButton, PillButton } from "components/buttons.slint";
-import { Section, Shell, PlaceholderPage } from "components/sidebar.slint";
+import { Section, Shell } from "components/sidebar.slint";
+import { FocusGrid } from "components/behavior.slint";
+import { Tooltip, TooltipLayer } from "components/tip-text.slint";
 import { BrowserModel, BrowserPage, Toast } from "browser.slint";
 import { HomeModel, HomePage } from "home.slint";
 import { PlayerModel, PlayerPage } from "player.slint";
 import { SettingsModel, SettingsPage } from "settings.slint";
+import { RecentModel, RecentPage } from "recent.slint";
 
 export { BrowserModel, BrowserItem, ItemKind, ItemBadge } from "browser.slint";
 export { HomeModel, ContinueItem, SourceTileItem, SourceIcon } from "home.slint";
 export { PlayerModel, PlayerLayout, TrackItem } from "player.slint";
 export { SettingsModel, OverrideItem } from "settings.slint";
+export { RecentModel } from "recent.slint";
 
 export { Section }
 //
@@ -470,6 +474,9 @@ component AppScreens inherits Rectangle {
         if (root.section == Section.settings) {
             SettingsModel.refresh();
         }
+        if (root.section == Section.recent) {
+            RecentModel.refresh();
+        }
     }
     changed view-mode => { KeyFocus.restore(); }
     changed loading => { KeyFocus.restore(); }
@@ -488,15 +495,14 @@ component AppScreens inherits Rectangle {
 
         if root.section == Section.browse: BrowserPage { }
 
-        if root.section == Section.recent: PlaceholderPage {
-            title: "Recent";
-            text: "Recently played files will show here.";
-        }
+        if root.section == Section.recent: RecentPage { }
 
         if root.section == Section.settings: SettingsPage { }
     }
 
     Toast { }
+
+    TooltipLayer { }
 
     // Escape (or Backspace) goes up a folder in Browse, and from the top of
     // a section back to Home. Returns whether the key was used.
@@ -556,8 +562,14 @@ export component AppWindow inherits Window {
     // Rust-side plumbing: invoked on the UI thread when player events wait.
     callback player-events-pending();
 
-    changed page => { keys.focus(); }
+    changed page => {
+        keys.focus();
+        // A tip from the browser must not linger over the player.
+        Tooltip.text = "";
+    }
     changed pip-active => { keys.focus(); }
+    changed width => { PlayerModel.resized(); }
+    changed height => { PlayerModel.resized(); }
     // Rust connects KeyFocus.restore to this.
     public function focus-keys() { keys.focus(); }
 
@@ -566,6 +578,12 @@ export component AppWindow inherits Window {
             if (root.page == 0) {
                 if (e.text == Key.Escape || e.text == Key.Backspace) {
                     return screens.back() ? EventResult.accept : EventResult.reject;
+                }
+                // Nothing focused, or a button that doesn't use arrows:
+                // start on the screen's first visible item.
+                if (FocusGrid.is-arrow(e.text)) {
+                    KeyFocus.focus-first();
+                    return accept;
                 }
                 return reject;
             }
@@ -690,6 +708,10 @@ export component BrowserWindow inherits Window {
         key-pressed(e) => {
             if (e.text == Key.Escape || e.text == Key.Backspace) {
                 return side-screens.back() ? EventResult.accept : EventResult.reject;
+            }
+            if (FocusGrid.is-arrow(e.text)) {
+                KeyFocus.focus-first();
+                return accept;
             }
             reject
         }

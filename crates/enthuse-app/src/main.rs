@@ -12,6 +12,7 @@ mod pip;
 mod pip_geometry;
 mod playback;
 mod pointer;
+mod recent;
 mod selftest;
 mod settings;
 mod thumbs;
@@ -116,6 +117,8 @@ fn run(
         store.clone(),
     );
     home.set_nav(&nav);
+    let recent = recent::Recent::new(&window, store.clone(), browser.clone());
+    recent.set_nav(&nav);
     let settings = settings::Settings::new(&window, store.clone(), browser.clone());
     {
         let nav = nav.clone();
@@ -131,6 +134,11 @@ fn run(
     browser.set_thumbs(&thumbs);
     home.set_thumbs(&thumbs);
     nav.set_thumbs(&thumbs);
+    recent.set_thumbs(&thumbs);
+    {
+        let thumbs = thumbs.clone();
+        settings.on_change(move || thumbs.settings_changed());
+    }
 
     let capture = video::ScreenCapture::default();
     // mpv needs the render context before a file is loaded, and the render
@@ -145,7 +153,8 @@ fn run(
         });
         let output = video::VideoOutput::new(player.clone(), move || {
             if let Some((url, title)) = start {
-                playback.open(&url, &title, None);
+                // An error shows on the player's overlay.
+                let _ = playback.open(&url, &title, None);
             }
         });
         output.attach(&window, Some(capture.clone()))?;
@@ -154,6 +163,7 @@ fn run(
     playback.attach_side(pip.side());
     home.attach_side(pip.side());
     settings.attach_side(pip.side());
+    recent.attach_side(pip.side());
     {
         let (pip, playback) = (pip.clone(), playback.clone());
         nav.set_on_leave_player(Box::new(move || {

@@ -66,38 +66,42 @@ export component Sidebar inherits Rectangle {
             }
         }
 
-        NavItem {
+        nav-home := NavItem {
             icon: Icons.home;
             text: "Home";
             compact: root.compact;
             active: root.section == Section.home;
             clicked => { root.navigate(Section.home); }
+            arrow(k) => { if (k == Key.DownArrow) { nav-browse.focus(); } return k == Key.UpArrow || k == Key.DownArrow; }
         }
 
-        NavItem {
+        nav-browse := NavItem {
             icon: Icons.folder;
             text: "Browse";
             compact: root.compact;
             active: root.section == Section.browse;
             clicked => { root.navigate(Section.browse); }
+            arrow(k) => { if (k == Key.UpArrow) { nav-home.focus(); return true; } if (k == Key.DownArrow) { nav-recent.focus(); return true; } return false; }
         }
 
-        NavItem {
+        nav-recent := NavItem {
             icon: Icons.recent;
             text: "Recent";
             compact: root.compact;
             active: root.section == Section.recent;
             clicked => { root.navigate(Section.recent); }
+            arrow(k) => { if (k == Key.UpArrow) { nav-browse.focus(); return true; } if (k == Key.DownArrow) { nav-settings.focus(); return true; } return false; }
         }
 
         Rectangle { }
 
-        NavItem {
+        nav-settings := NavItem {
             icon: Icons.settings;
             text: "Settings";
             compact: root.compact;
             active: root.section == Section.settings;
             clicked => { root.navigate(Section.settings); }
+            arrow(k) => { if (k == Key.UpArrow) { nav-recent.focus(); } return k == Key.UpArrow || k == Key.DownArrow; }
         }
     }
 
@@ -139,34 +143,5 @@ export component Shell inherits Rectangle {
         height: root.height;
 
         @children
-    }
-}
-
-// Stand-in for screens that are built in later issues of M2.
-export component PlaceholderPage inherits Rectangle {
-    in property <string> title;
-    in property <string> text;
-
-    VerticalLayout {
-        padding-left: Theme.content-padding-x;
-        padding-right: Theme.content-padding-x;
-        padding-top: Theme.content-padding-top;
-        spacing: Theme.space-12;
-        alignment: start;
-
-        Text {
-            text: root.title;
-            color: Theme.text;
-            font-size: Theme.title-size;
-            font-weight: Theme.title-weight;
-            letter-spacing: Theme.title-letter-spacing;
-        }
-
-        Text {
-            text: root.text;
-            color: Theme.text-muted;
-            font-size: Theme.body-size;
-            wrap: word-wrap;
-        }
     }
 }

@@ -10,6 +10,8 @@ export component NavItem inherits Rectangle {
     in property <bool> active;
     in property <bool> compact;
     callback clicked();
+    // See ButtonBehavior.arrow.
+    callback arrow(string) -> bool;
 
     height: Theme.nav-item-height;
     border-radius: Theme.radius-medium;
@@ -50,6 +52,7 @@ export component NavItem inherits Rectangle {
 
     behavior := ButtonBehavior {
         ring-radius: root.border-radius;
+        arrow(k) => { return root.arrow(k); }
         clicked => {
             root.clicked();
         }
