@@ -14,7 +14,7 @@ use enthuse_core::storage::{SourceId, Store};
 use enthuse_core::time::format_time;
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel, Weak};
 
-use crate::{AppWindow, BrowserItem, bg};
+use crate::{AppWindow, BrowserItem, BrowserWindow, bg};
 
 const KIND_SOURCE: i32 = 0;
 const KIND_FOLDER: i32 = 1;
@@ -46,8 +46,71 @@ enum Location {
     Folder { source: usize, path: SourcePath },
 }
 
+/// The window the browser shows in: the main window, or its own window
+/// while the main window is the PiP player.
+#[derive(Clone)]
+pub enum View {
+    Main(Weak<AppWindow>),
+    Side(Weak<BrowserWindow>),
+}
+
+/// A live handle to the window of a [`View`].
+enum Ui {
+    Main(AppWindow),
+    Side(BrowserWindow),
+}
+
+/// Both window types have the same `browser-*` properties; forward to
+/// whichever one shows the browser.
+macro_rules! ui_setters {
+    ($($name:ident: $ty:ty),* $(,)?) => {
+        impl Ui {
+            $(fn $name(&self, value: $ty) {
+                match self {
+                    Ui::Main(w) => w.$name(value),
+                    Ui::Side(w) => w.$name(value),
+                }
+            })*
+        }
+    };
+}
+
+ui_setters!(
+    set_browser_error: SharedString,
+    set_browser_loading: bool,
+    set_browser_heading: SharedString,
+    set_browser_can_go_up: bool,
+    set_browser_at_sources: bool,
+    set_browser_items: ModelRc<BrowserItem>,
+    set_browser_resume_label: SharedString,
+);
+
+/// Connects a window's browser callbacks to `$browser`.
+macro_rules! wire_callbacks {
+    ($window:expr, $browser:expr) => {{
+        let window = $window;
+        let b = $browser.clone();
+        window.on_browser_activate(move |i| b.activate(i as usize));
+        let b = $browser.clone();
+        window.on_browser_up(move || b.up());
+        let b = $browser.clone();
+        window.on_browser_remove(move |i| b.remove_source(i as usize));
+        let b = $browser.clone();
+        window.on_browser_cycle_resume(move || b.cycle_resume());
+        let b = $browser.clone();
+        window.on_add_source(move |path| {
+            if let Some(index) = b.add_local(path.trim()) {
+                b.navigate(Location::Folder {
+                    source: index,
+                    path: SourcePath::root(),
+                });
+            }
+        });
+    }};
+}
+
 pub struct Browser {
-    window: Weak<AppWindow>,
+    view: RefCell<View>,
     store: Rc<Store>,
     sources: RefCell<Vec<SourceSlot>>,
     location: RefCell<Location>,
@@ -62,7 +125,7 @@ impl Browser {
     /// Shows the sources saved in `store`.
     pub fn new(window: &AppWindow, store: Rc<Store>) -> Rc<Self> {
         let this = Rc::new(Self {
-            window: window.as_weak(),
+            view: RefCell::new(View::Main(window.as_weak())),
             store,
             sources: Default::default(),
             location: RefCell::new(Location::Sources),
@@ -72,26 +135,29 @@ impl Browser {
         });
         this.load_sources();
 
-        let b = this.clone();
-        window.on_browser_activate(move |i| b.activate(i as usize));
-        let b = this.clone();
-        window.on_browser_up(move || b.up());
-        let b = this.clone();
-        window.on_browser_remove(move |i| b.remove_source(i as usize));
-        let b = this.clone();
-        window.on_browser_cycle_resume(move || b.cycle_resume());
-        let b = this.clone();
-        window.on_add_source(move |path| {
-            if let Some(index) = b.add_local(path.trim()) {
-                b.navigate(Location::Folder {
-                    source: index,
-                    path: SourcePath::root(),
-                });
-            }
-        });
+        wire_callbacks!(window, this);
 
         this.navigate(Location::Sources);
         this
+    }
+
+    /// Lets `window` show the browser too, once [`Self::set_view`] picks it.
+    pub fn attach_side(self: &Rc<Self>, window: &BrowserWindow) {
+        wire_callbacks!(window, self);
+    }
+
+    /// Moves the browser to another window and shows the current folder
+    /// there.
+    pub fn set_view(self: &Rc<Self>, view: View) {
+        *self.view.borrow_mut() = view;
+        self.refresh();
+    }
+
+    fn ui(&self) -> Option<Ui> {
+        match &*self.view.borrow() {
+            View::Main(w) => w.upgrade().map(Ui::Main),
+            View::Side(w) => w.upgrade().map(Ui::Side),
+        }
     }
 
     pub fn set_play_handler(&self, handler: PlayHandler) {
@@ -226,7 +292,7 @@ impl Browser {
             *g += 1;
             *g
         };
-        let Some(w) = self.window.upgrade() else {
+        let Some(w) = self.ui() else {
             return;
         };
         w.set_browser_error(SharedString::new());
@@ -268,7 +334,7 @@ impl Browser {
     }
 
     fn show_sources(&self) {
-        let Some(w) = self.window.upgrade() else {
+        let Some(w) = self.ui() else {
             return;
         };
         let items: Vec<_> = self
@@ -295,7 +361,7 @@ impl Browser {
         folder: &SourcePath,
         result: Result<Vec<Entry>, SourceError>,
     ) {
-        let Some(w) = self.window.upgrade() else {
+        let Some(w) = self.ui() else {
             return;
         };
         w.set_browser_loading(false);
@@ -377,7 +443,7 @@ impl Browser {
     }
 
     fn update_resume_label(&self) {
-        let Some(w) = self.window.upgrade() else {
+        let Some(w) = self.ui() else {
             return;
         };
         let on_off = |on: bool| if on { "On" } else { "Off" };
@@ -407,8 +473,8 @@ impl Browser {
         w.set_browser_resume_label(label.into());
     }
 
-    fn show_error(&self, message: &str) {
-        if let Some(w) = self.window.upgrade() {
+    pub fn show_error(&self, message: &str) {
+        if let Some(w) = self.ui() {
             w.set_browser_error(message.into());
         }
     }

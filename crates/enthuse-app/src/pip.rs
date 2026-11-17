@@ -1,6 +1,8 @@
 //! Picture-in-picture: the main window turns into a small borderless,
 //! always-on-top player and back. The video stays in the same window, so
 //! mpv's render context never has to move (that stalls playback, see #52).
+//! Meanwhile the browser opens in a window of its own where the main
+//! window was, so it looks as if only the video popped out.
 //! Wayland may ignore always-on-top and does not let apps place windows;
 //! PiP still works there, just not on top and not moved to a corner.
 
@@ -10,11 +12,14 @@ use std::time::Duration;
 
 use slint::winit_030::WinitWindowAccessor;
 use slint::winit_030::winit::window::ResizeDirection;
-use slint::{ComponentHandle, PhysicalPosition, PhysicalSize, Timer, TimerMode, Weak};
+use slint::{
+    CloseRequestResponse, ComponentHandle, PhysicalPosition, PhysicalSize, Timer, TimerMode, Weak,
+};
 
-use crate::AppWindow;
+use crate::browser::{Browser, View};
 use crate::pip_geometry::{Edges, Rect, fit_aspect, resize};
 use crate::pointer;
+use crate::{AppWindow, BrowserWindow};
 
 /// PiP size when entering, in logical pixels; the video's ratio is fitted
 /// into it.
@@ -26,7 +31,7 @@ const PIP_MARGIN: f32 = 24.0;
 /// How often a move or resize follows the pointer.
 const DRAG_TICK: Duration = Duration::from_millis(8);
 
-/// The main window's geometry before PiP, restored on exit.
+/// A window's geometry, to hand over between the main and browser windows.
 #[derive(Clone, Copy)]
 struct Saved {
     size: PhysicalSize,
@@ -37,15 +42,28 @@ struct Saved {
 
 pub struct Pip {
     main: Weak<AppWindow>,
+    /// Shows the browser while the main window is the PiP player.
+    side: BrowserWindow,
+    browser: Rc<Browser>,
+    /// Set while PiP is on.
     saved: Cell<Option<Saved>>,
     /// Follows the pointer during a move or resize we do ourselves.
     drag: RefCell<Option<Timer>>,
 }
 
 impl Pip {
-    pub fn new(main: &AppWindow) -> Rc<Self> {
+    pub fn new(main: &AppWindow, browser: Rc<Browser>) -> Result<Rc<Self>, slint::PlatformError> {
+        let side = BrowserWindow::new()?;
+        browser.attach_side(&side);
+        // The browser window stands in for the main window: closing it quits.
+        side.window().on_close_requested(|| {
+            let _ = slint::quit_event_loop();
+            CloseRequestResponse::HideWindow
+        });
         let this = Rc::new(Self {
             main: main.as_weak(),
+            side,
+            browser,
             saved: Cell::new(None),
             drag: RefCell::new(None),
         });
@@ -78,10 +96,11 @@ impl Pip {
                 }
             }
         });
-        this
+        Ok(this)
     }
 
-    /// Turns the main window into the PiP player.
+    /// Turns the main window into the PiP player, and opens the browser
+    /// in its own window where the main window was.
     pub fn enter(&self) {
         let Some(m) = self.main.upgrade() else {
             return;
@@ -90,13 +109,30 @@ impl Pip {
             return;
         }
         let window = m.window();
-        let saved = Saved {
-            size: window.size(),
-            position: window.position(),
-            maximized: window.is_maximized(),
-            fullscreen: window.is_fullscreen(),
-        };
+        let saved = geometry(window);
         self.saved.set(Some(saved));
+
+        // The browser window takes the main window's place. Place it again
+        // once shown: window managers may place a new window themselves.
+        let side = self.side.window();
+        side.set_size(saved.size);
+        side.set_position(saved.position);
+        self.browser.set_view(View::Side(self.side.as_weak()));
+        if let Err(err) = self.side.show() {
+            eprintln!("enthuse: cannot open the browser window: {err}");
+            self.browser.set_view(View::Main(m.as_weak()));
+        } else if saved.maximized || saved.fullscreen {
+            side.set_maximized(true);
+        } else {
+            side.set_position(saved.position);
+            let weak = self.side.as_weak();
+            Timer::single_shot(Duration::from_millis(50), move || {
+                if let Some(w) = weak.upgrade() {
+                    w.window().set_position(saved.position);
+                }
+            });
+        }
+
         if saved.fullscreen {
             window.set_fullscreen(false);
         }
@@ -129,7 +165,8 @@ impl Pip {
         }
     }
 
-    /// Restores the main window as it was before PiP.
+    /// Turns the PiP player back into the main window, where the browser
+    /// window is now, and closes the browser window.
     pub fn exit(&self) {
         let Some(saved) = self.saved.take() else {
             return;
@@ -138,16 +175,31 @@ impl Pip {
         let Some(m) = self.main.upgrade() else {
             return;
         };
+        // Take the browser window's place, as the user left it.
+        let target = if self.side.window().is_visible() {
+            let mut g = geometry(self.side.window());
+            g.fullscreen = saved.fullscreen;
+            if g.maximized {
+                // Its restored size and position are not known here.
+                g.size = saved.size;
+                g.position = saved.position;
+            }
+            g
+        } else {
+            saved
+        };
         let window = m.window();
         m.set_pip_active(false);
-        window.set_size(saved.size);
-        window.set_position(saved.position);
-        if saved.maximized {
+        window.set_size(target.size);
+        window.set_position(target.position);
+        if target.maximized {
             window.set_maximized(true);
         }
-        if saved.fullscreen {
+        if target.fullscreen {
             window.set_fullscreen(true);
         }
+        self.browser.set_view(View::Main(m.as_weak()));
+        let _ = self.side.hide();
     }
 
     /// Fits the PiP window to a new video's aspect ratio, never taller.
@@ -235,6 +287,15 @@ impl Pip {
             }
         });
         *self.drag.borrow_mut() = Some(timer);
+    }
+}
+
+fn geometry(window: &slint::Window) -> Saved {
+    Saved {
+        size: window.size(),
+        position: window.position(),
+        maximized: window.is_maximized(),
+        fullscreen: window.is_fullscreen(),
     }
 }
 

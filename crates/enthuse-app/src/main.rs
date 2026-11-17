@@ -90,7 +90,13 @@ fn run(
     for folder in folders {
         browser.add_local(folder);
     }
-    let nav = nav::Nav::new(&window, player.clone(), playback.clone(), browser, store);
+    let nav = nav::Nav::new(
+        &window,
+        player.clone(),
+        playback.clone(),
+        browser.clone(),
+        store,
+    );
 
     let capture = video::ScreenCapture::default();
     // mpv needs the render context before a file is loaded, and the render
@@ -110,7 +116,7 @@ fn run(
         });
         output.attach(&window, Some(capture.clone()))?;
     }
-    let pip = pip::Pip::new(&window);
+    let pip = pip::Pip::new(&window, browser.clone())?;
     {
         let pip = pip.clone();
         nav.set_on_leave_player(Box::new(move || pip.exit()));
