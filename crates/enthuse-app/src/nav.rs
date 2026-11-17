@@ -9,7 +9,7 @@ use std::sync::Arc;
 use enthuse_core::next::next_video;
 use enthuse_core::resume::{SaveSchedule, start_position};
 use enthuse_core::source::SourcePath;
-use enthuse_core::storage::Store;
+use enthuse_core::storage::{DEFAULT_WATCHED_THRESHOLD, Store};
 use enthuse_player::{EndReason, Player, PlayerEvent};
 use slint::{ComponentHandle, Weak};
 
@@ -89,7 +89,11 @@ impl Nav {
         match source.source.playable(&path) {
             Ok(url) => {
                 let state = self.store.watch_state(source.id, &path).ok().flatten();
-                let start = start_position(state.as_ref());
+                let threshold = self
+                    .store
+                    .watched_threshold()
+                    .unwrap_or(DEFAULT_WATCHED_THRESHOLD);
+                let start = start_position(state.as_ref(), threshold);
                 self.playback.open(&url, path.name().unwrap_or(&url), start);
                 *self.current.borrow_mut() = Some(Current {
                     source,
@@ -126,15 +130,21 @@ impl Nav {
         };
         if let Some(current) = self.current.borrow_mut().as_mut() {
             current.schedule.saved(position);
-            self.store_position(current, position);
+            self.store_position(current, position, true);
         }
     }
 
-    fn store_position(&self, current: &Current, position: f64) {
-        if let Err(err) =
-            self.store
-                .save_position(current.source.id, &current.path, position, current.duration)
-        {
+    /// Saves `position`. A `final_save` (pause, stop, exit) marks the file
+    /// watched if it is past the threshold; periodic saves never do, so a
+    /// seek past the end and back keeps the resume point.
+    fn store_position(&self, current: &Current, position: f64, final_save: bool) {
+        let (id, path, duration) = (current.source.id, &current.path, current.duration);
+        let result = if final_save {
+            self.store.save_position(id, path, position, duration)
+        } else {
+            self.store.save_progress(id, path, position, duration)
+        };
+        if let Err(err) = result {
             eprintln!("enthuse: cannot save position: {err}");
         }
     }
@@ -151,7 +161,7 @@ impl Nav {
                 if let Some(current) = current.as_mut()
                     && current.schedule.due(*p)
                 {
-                    self.store_position(current, *p);
+                    self.store_position(current, *p, false);
                 }
             }
             PlayerEvent::PauseChanged(true) => self.save_position(),
