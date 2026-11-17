@@ -12,6 +12,8 @@ export struct ContinueItem {
     subtitle: string,
     // How far along (0..1).
     progress: float,
+    // A frame grab (#68); empty until there is one.
+    thumbnail: image,
 }
 
 export enum SourceIcon { drive, server, library }
@@ -69,8 +71,14 @@ component ContinueCard inherits Rectangle {
                 duration: Theme.hover-duration;
             }
 
-            // Thumbnail slot (#68).
-            Image {
+            if root.item.thumbnail.width > 0: Image {
+                width: parent.width;
+                height: parent.height;
+                source: root.item.thumbnail;
+                image-fit: cover;
+            }
+
+            if root.item.thumbnail.width == 0: Image {
                 width: Theme.icon-size-large + 6px;
                 height: self.width;
                 source: Icons.video;

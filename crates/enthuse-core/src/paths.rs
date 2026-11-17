@@ -9,6 +9,7 @@ use directories::ProjectDirs;
 pub struct AppDirs {
     data: PathBuf,
     config: PathBuf,
+    cache: PathBuf,
 }
 
 impl AppDirs {
@@ -16,6 +17,7 @@ impl AppDirs {
     ///
     /// - Linux: `$XDG_DATA_HOME/enthuse` and `$XDG_CONFIG_HOME/enthuse`.
     /// - Windows: `%APPDATA%\Enthuse\data` and `%APPDATA%\Enthuse\config`.
+    /// - Cache: `$XDG_CACHE_HOME/enthuse`, or `%LOCALAPPDATA%\Enthuse\cache`.
     ///
     /// Returns `None` if no home directory can be determined.
     pub fn from_system() -> Option<Self> {
@@ -23,6 +25,7 @@ impl AppDirs {
         Some(Self {
             data: dirs.data_dir().to_path_buf(),
             config: dirs.config_dir().to_path_buf(),
+            cache: dirs.cache_dir().to_path_buf(),
         })
     }
 
@@ -33,6 +36,7 @@ impl AppDirs {
         Self {
             data: base.join("data"),
             config: base.join("config"),
+            cache: base.join("cache"),
         }
     }
 
@@ -44,6 +48,16 @@ impl AppDirs {
     /// Directory for user configuration.
     pub fn config_dir(&self) -> &Path {
         &self.config
+    }
+
+    /// Directory for data that can be rebuilt, such as thumbnails.
+    pub fn cache_dir(&self) -> &Path {
+        &self.cache
+    }
+
+    /// Directory for video thumbnails.
+    pub fn thumbnail_dir(&self) -> PathBuf {
+        self.cache.join("thumbnails")
     }
 
     /// Path of the SQLite database file.
@@ -68,6 +82,12 @@ mod tests {
         assert_eq!(
             dirs.config_dir(),
             Path::new("/tmp/enthuse-test").join("config")
+        );
+        assert_eq!(
+            dirs.thumbnail_dir(),
+            Path::new("/tmp/enthuse-test")
+                .join("cache")
+                .join("thumbnails")
         );
     }
 

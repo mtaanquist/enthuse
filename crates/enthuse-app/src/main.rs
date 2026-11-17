@@ -13,6 +13,7 @@ mod pip_geometry;
 mod playback;
 mod pointer;
 mod selftest;
+mod thumbs;
 mod video;
 
 use std::path::Path;
@@ -111,9 +112,19 @@ fn run(
         player.clone(),
         playback.clone(),
         browser.clone(),
-        store,
+        store.clone(),
     );
     home.set_nav(&nav);
+    // No thumbnails in the self-test, which has no real files and must not
+    // write to the user's cache.
+    let thumb_dir = (!self_test)
+        .then(AppDirs::from_system)
+        .flatten()
+        .map(|dirs| dirs.thumbnail_dir());
+    let thumbs = thumbs::Thumbs::new(store.clone(), thumb_dir);
+    browser.set_thumbs(&thumbs);
+    home.set_thumbs(&thumbs);
+    nav.set_thumbs(&thumbs);
 
     let capture = video::ScreenCapture::default();
     // mpv needs the render context before a file is loaded, and the render

@@ -17,6 +17,7 @@ use slint::{ComponentHandle, Weak};
 
 use crate::browser::{Browser, SourceRef};
 use crate::playback::Playback;
+use crate::thumbs::{Thumbs, thumb_id};
 use crate::{AppWindow, PlayerModel, bg};
 
 pub const PAGE_BROWSER: i32 = 0;
@@ -44,6 +45,7 @@ pub struct Nav {
     /// Bumped whenever the user or auto-next starts or stops a file, so a
     /// slow next-file lookup does not override what happened meanwhile.
     generation: Cell<u64>,
+    thumbs: RefCell<Option<Rc<Thumbs>>>,
 }
 
 impl Nav {
@@ -64,6 +66,7 @@ impl Nav {
             next: RefCell::new(None),
             on_leave_player: RefCell::new(None),
             generation: Cell::new(0),
+            thumbs: RefCell::new(None),
         });
 
         let weak = Rc::downgrade(&this);
@@ -167,6 +170,7 @@ impl Nav {
         let this = Rc::downgrade(self);
         let generation = self.generation.get();
         let (src, path) = (source.source.clone(), path.clone());
+        let source = source.clone();
         bg::spawn(
             move || next_video(&*src, &path),
             move |next| {
@@ -175,10 +179,53 @@ impl Nav {
                 {
                     let next = next.ok().flatten();
                     this.playback.set_has_next(next.is_some());
+                    if let Some(next) = &next {
+                        this.want_thumbnail(&source, next);
+                    }
                     *this.next.borrow_mut() = next;
                 }
             },
         );
+    }
+
+    /// Shows thumbnails from `thumbs` on the Up next card.
+    pub fn set_thumbs(self: &Rc<Self>, thumbs: &Rc<Thumbs>) {
+        let weak = Rc::downgrade(self);
+        thumbs.on_ready(move |id, image| {
+            let Some(this) = weak.upgrade() else {
+                return;
+            };
+            let source = this.current.borrow().as_ref().map(|c| c.source.id);
+            let is_next = match (source, this.next.borrow().as_ref()) {
+                (Some(source), Some(next)) => thumb_id(source, next) == id,
+                _ => false,
+            };
+            if is_next && let Some(w) = this.window.upgrade() {
+                w.global::<PlayerModel>()
+                    .set_up_next_thumbnail(image.clone());
+            }
+        });
+        *self.thumbs.borrow_mut() = Some(thumbs.clone());
+    }
+
+    /// Asks for the next file's thumbnail for the Up next card, and shows
+    /// the one there is so far (or none).
+    fn want_thumbnail(&self, source: &SourceRef, next: &SourcePath) {
+        let Some(thumbs) = self.thumbs.borrow().clone() else {
+            return;
+        };
+        let location = self
+            .browser
+            .sources()
+            .into_iter()
+            .find(|(s, _)| s.id == source.id)
+            .map(|(_, location)| location)
+            .unwrap_or_default();
+        thumbs.want(source.id, &source.source, &location, next);
+        if let Some(w) = self.window.upgrade() {
+            w.global::<PlayerModel>()
+                .set_up_next_thumbnail(thumbs.image(&thumb_id(source.id, next)));
+        }
     }
 
     /// Retry after a playback error.

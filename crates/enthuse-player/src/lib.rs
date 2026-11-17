@@ -6,6 +6,7 @@
 
 pub mod gl;
 mod mpv;
+pub mod thumbnail;
 
 pub use mpv::MpvPlayer;
 
