@@ -409,6 +409,7 @@ fn resize_direction(direction: i32) -> ResizeDirection {
 
 #[cfg(target_os = "windows")]
 mod win32 {
+    use slint::ComponentHandle;
     use slint::winit_030::WinitWindowAccessor;
     use slint::winit_030::winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
