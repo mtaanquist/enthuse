@@ -7,8 +7,10 @@ export { KeyFocus }
 import { ButtonVariant, IconButton, PillButton } from "components/buttons.slint";
 import { Section, Shell, PlaceholderPage } from "components/sidebar.slint";
 import { BrowserModel, BrowserPage } from "browser.slint";
+import { HomeModel, HomePage } from "home.slint";
 
 export { BrowserModel, BrowserItem, ItemKind, ItemBadge } from "browser.slint";
+export { HomeModel, ContinueItem, SourceTileItem, SourceIcon } from "home.slint";
 
 export { Section }
 //
@@ -470,7 +472,13 @@ component AppScreens inherits Rectangle {
     property <int> view-mode: BrowserModel.view-mode;
     property <bool> loading: BrowserModel.loading;
     property <bool> at-sources: BrowserModel.at-sources;
-    changed section => { KeyFocus.restore(); }
+    changed section => {
+        KeyFocus.restore();
+        // Pick up sources that came back online or went away.
+        if (root.section == Section.home) {
+            HomeModel.refresh();
+        }
+    }
     changed view-mode => { KeyFocus.restore(); }
     changed loading => { KeyFocus.restore(); }
     changed at-sources => { KeyFocus.restore(); }
@@ -479,9 +487,11 @@ component AppScreens inherits Rectangle {
     Shell {
         section <=> root.section;
 
-        if root.section == Section.home: PlaceholderPage {
-            title: "Home";
-            text: "Continue watching and your sources will show here. Use Browse to open a source for now.";
+        if root.section == Section.home: HomePage {
+            open-source(index) => {
+                HomeModel.open-source(index);
+                root.section = Section.browse;
+            }
         }
 
         if root.section == Section.browse: BrowserPage { }
@@ -529,8 +539,7 @@ export component AppWindow inherits Window {
 
     // 0 = app screens (see `section`), 1 = player.
     in property <int> page;
-    // Browse until Home is built (#64).
-    in-out property <Section> section: Section.browse;
+    in-out property <Section> section: Section.home;
 
 
     in property <bool> paused;
@@ -635,7 +644,7 @@ export component BrowserWindow inherits Window {
     default-font-size: Theme.body-size;
     forward-focus: keys;
 
-    in-out property <Section> section: Section.browse;
+    in-out property <Section> section: Section.home;
 
     // The video playing in the PiP window.
     in property <bool> paused;

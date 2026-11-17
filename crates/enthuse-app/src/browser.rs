@@ -117,6 +117,9 @@ pub struct Browser {
     /// are ignored.
     generation: RefCell<u64>,
     on_play: RefCell<Option<PlayHandler>>,
+    /// Runs after a source is added or removed, or the browser refreshes
+    /// (e.g. after playback), so Home can update.
+    on_change: RefCell<Option<Box<dyn Fn()>>>,
 }
 
 impl Browser {
@@ -134,6 +137,7 @@ impl Browser {
             action: Default::default(),
             generation: Default::default(),
             on_play: Default::default(),
+            on_change: Default::default(),
         });
         this.load_sources();
 
@@ -169,6 +173,44 @@ impl Browser {
         *self.on_play.borrow_mut() = Some(handler);
     }
 
+    pub fn set_change_handler(&self, handler: Box<dyn Fn()>) {
+        *self.on_change.borrow_mut() = Some(handler);
+    }
+
+    fn changed(&self) {
+        if let Some(f) = self.on_change.borrow().as_ref() {
+            f();
+        }
+    }
+
+    /// The saved sources in display order, each with its location.
+    pub fn sources(&self) -> Vec<(SourceRef, String)> {
+        self.sources
+            .borrow()
+            .iter()
+            .map(|s| (s.source.clone(), s.location.clone()))
+            .collect()
+    }
+
+    /// The source with database id `id`, if it is still in the list.
+    pub fn source_by_id(&self, id: SourceId) -> Option<SourceRef> {
+        self.sources
+            .borrow()
+            .iter()
+            .find(|s| s.source.id == id)
+            .map(|s| s.source.clone())
+    }
+
+    /// Shows the root folder of the source at `index`.
+    pub fn open_source(self: &Rc<Self>, index: usize) {
+        if index < self.sources.borrow().len() {
+            self.navigate(Location::Folder {
+                source: index,
+                path: SourcePath::root(),
+            });
+        }
+    }
+
     /// Adds and saves a local folder, mount or UNC path as a source, unless
     /// it is already there. Returns its index in the source list.
     pub fn add_local(&self, path: &str) -> Option<usize> {
@@ -200,6 +242,7 @@ impl Browser {
         if matches!(*self.location.borrow(), Location::Sources) {
             self.show_sources();
         }
+        self.changed();
         Some(self.sources.borrow().len() - 1)
     }
 
@@ -208,6 +251,7 @@ impl Browser {
     pub fn refresh(self: &Rc<Self>) {
         let location = self.location.borrow().clone();
         self.navigate(location);
+        self.changed();
     }
 
     fn load_sources(&self) {
@@ -231,10 +275,9 @@ impl Browser {
         }
     }
 
-    fn remove_source(&self, index: usize) {
-        if !matches!(*self.location.borrow(), Location::Sources) {
-            return;
-        }
+    /// Removes the source at `index` and forgets it in the database. If the
+    /// browser is inside it, it goes back to the source list.
+    pub fn remove_source(self: &Rc<Self>, index: usize) {
         let Some(id) = self.sources.borrow().get(index).map(|s| s.source.id) else {
             return;
         };
@@ -243,7 +286,19 @@ impl Browser {
             return;
         }
         self.sources.borrow_mut().remove(index);
-        self.show_sources();
+        let location = self.location.borrow().clone();
+        match location {
+            Location::Sources => self.show_sources(),
+            Location::Folder { source, .. } if source == index => self.navigate(Location::Sources),
+            Location::Folder { source, path } if source > index => {
+                *self.location.borrow_mut() = Location::Folder {
+                    source: source - 1,
+                    path,
+                };
+            }
+            Location::Folder { .. } => {}
+        }
+        self.changed();
     }
 
     fn activate(self: &Rc<Self>, index: usize) {

@@ -196,6 +196,39 @@ impl Store {
             .optional()?)
     }
 
+    /// Files that were started and not finished, most recently played
+    /// first, for "Continue watching". At most `limit`.
+    pub fn continue_watching(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<(SourceId, SourcePath, WatchState)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT source_id, path, position, duration, watched FROM watch_state
+             WHERE watched = 0 AND position > 0
+             ORDER BY updated_at DESC, rowid DESC
+             LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit as i64], |r| {
+            Ok((
+                SourceId(r.get(0)?),
+                r.get::<_, String>(1)?,
+                WatchState {
+                    position: r.get(2)?,
+                    duration: r.get(3)?,
+                    watched: r.get(4)?,
+                },
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (source, path, state) = row?;
+            let path =
+                SourcePath::parse(&path).map_err(|e| StorageError::Corrupt(e.to_string()))?;
+            out.push((source, path, state));
+        }
+        Ok(out)
+    }
+
     /// States of all played files directly inside `folder`, keyed by path,
     /// for showing markers in the browser.
     pub fn folder_states(
@@ -427,6 +460,44 @@ mod tests {
 
     fn store() -> Store {
         Store::open_in_memory().unwrap()
+    }
+
+    #[test]
+    fn continue_watching_lists_started_files_newest_first() {
+        let s = store();
+        let src = s.add_source("local", "M", "/m").unwrap();
+        s.save_progress(src, &p("a.mkv"), 100.0, Some(1000.0))
+            .unwrap();
+        s.save_progress(src, &p("b.mkv"), 200.0, Some(1000.0))
+            .unwrap();
+        s.save_position(src, &p("done.mkv"), 990.0, Some(1000.0))
+            .unwrap();
+        s.save_progress(src, &p("zero.mkv"), 0.0, Some(1000.0))
+            .unwrap();
+        // Played again later: moves to the front. Times are in seconds, so
+        // set them by hand rather than sleeping.
+        s.save_progress(src, &p("a.mkv"), 150.0, Some(1000.0))
+            .unwrap();
+        s.conn
+            .execute(
+                "UPDATE watch_state SET updated_at = 100 WHERE path = 'b.mkv'",
+                [],
+            )
+            .unwrap();
+        s.conn
+            .execute(
+                "UPDATE watch_state SET updated_at = 200 WHERE path = 'a.mkv'",
+                [],
+            )
+            .unwrap();
+        let list = s.continue_watching(10).unwrap();
+        let names: Vec<_> = list.iter().map(|(_, path, _)| path.as_str()).collect();
+        assert_eq!(names, ["a.mkv", "b.mkv"]);
+        assert_eq!(list[0].2.position, Some(150.0));
+        assert_eq!(s.continue_watching(1).unwrap().len(), 1);
+        // Removing the source drops its files.
+        s.remove_source(src).unwrap();
+        assert!(s.continue_watching(10).unwrap().is_empty());
     }
 
     #[test]
