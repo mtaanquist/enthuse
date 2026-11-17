@@ -1,6 +1,8 @@
 //! Headless tests of MpvPlayer against FFmpeg-generated media (no files,
 //! no window, no audio device).
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use enthuse_player::{EndReason, MpvPlayer, Player, PlayerEvent, TrackKind};
@@ -130,4 +132,19 @@ fn volume_is_clamped() {
     assert_eq!(player.volume(), 100.0);
     player.set_volume(40.0).unwrap();
     assert_eq!(player.volume(), 40.0);
+}
+
+#[test]
+fn wakeup_fires_for_events_queued_before_it_was_set() {
+    let player = headless();
+    // The initial property values are queued by now, and mpv has already
+    // tried (and failed, with no callback set) to signal them.
+    std::thread::sleep(Duration::from_millis(200));
+    let wakeups = Arc::new(AtomicUsize::new(0));
+    let counter = wakeups.clone();
+    player.set_wakeup(Arc::new(move || {
+        counter.fetch_add(1, Ordering::SeqCst);
+    }));
+    assert!(wakeups.load(Ordering::SeqCst) >= 1);
+    assert!(player.poll_event().is_some());
 }
