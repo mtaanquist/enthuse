@@ -124,7 +124,6 @@ component PlayerPage inherits Rectangle {
     in property <string> title;
     in property <string> message;
     in property <[TrackItem]> subtitle-tracks;
-    in property <bool> pip-active;
     callback toggle-pause();
     callback seek(float);
     callback select-subtitle(int);
@@ -132,12 +131,6 @@ component PlayerPage inherits Rectangle {
     callback toggle-pip();
 
     property <bool> show-subtitles;
-
-    if root.pip-active: Text {
-        text: "Playing in picture-in-picture";
-        color: Palette.muted;
-        font-size: 16px;
-    }
 
     // Top bar: back and title.
     Rectangle {
@@ -476,134 +469,82 @@ component BrowserPage inherits Rectangle {
     }
 }
 
-export component AppWindow inherits Window {
-    title: root.page == 1 && root.video-title != "" ? root.video-title + " - Enthuse" : "Enthuse";
-    preferred-width: 640px;
-    preferred-height: 480px;
-    min-width: 360px;
-    min-height: 270px;
-    background: transparent;
-    forward-focus: keys;
-
-    // 0 = folder browser, 1 = player.
-    in property <int> page;
-
-    in property <string> browser-heading;
-    in property <bool> browser-can-go-up;
-    in property <bool> browser-at-sources: true;
-    in property <[BrowserItem]> browser-items;
-    in property <bool> browser-loading;
-    in property <string> browser-error;
-    callback browser-up();
-    callback browser-activate(int);
-    callback browser-remove(int);
-    callback add-source(string);
-
-    in property <bool> paused;
-    in property <float> position;
-    in property <float> duration;
-    in property <string> position-text: "0:00";
-    in property <string> duration-text: "0:00";
-    in property <string> video-title;
-    in property <string> message;
-    in property <[TrackItem]> subtitle-tracks;
-    callback toggle-pause();
-    callback seek(float);
-    callback seek-relative(float);
-    callback select-subtitle(int);
-    callback back();
-    in property <bool> pip-active;
-    callback toggle-pip();
-    // Rust-side plumbing: invoked on the UI thread when player events wait.
-    callback player-events-pending();
-
-    changed page => { keys.focus(); }
-
-    keys := FocusScope {
-        key-pressed(e) => {
-            if (root.page == 0) {
-                if (e.text == Key.Escape || e.text == Key.Backspace) {
-                    root.browser-up();
-                    return accept;
-                }
-                return reject;
-            }
-            if (e.text == " ") {
-                root.toggle-pause();
-                return accept;
-            }
-            if (e.text == Key.Escape) {
-                root.back();
-                return accept;
-            }
-            if (e.text == Key.LeftArrow) {
-                root.seek-relative(-10);
-                return accept;
-            }
-            if (e.text == Key.RightArrow) {
-                root.seek-relative(10);
-                return accept;
-            }
-            reject
-        }
-
-        if root.page == 0: BrowserPage {
-            heading: root.browser-heading;
-            can-go-up: root.browser-can-go-up;
-            at-sources: root.browser-at-sources;
-            items: root.browser-items;
-            loading: root.browser-loading;
-            error: root.browser-error;
-            up => { root.browser-up(); }
-            activate(i) => { root.browser-activate(i); }
-            remove(i) => { root.browser-remove(i); }
-            add-source(path) => { root.add-source(path); }
-        }
-
-        if root.page == 1: PlayerPage {
-            paused: root.paused;
-            position: root.position;
-            duration: root.duration;
-            position-text: root.position-text;
-            duration-text: root.duration-text;
-            title: root.video-title;
-            message: root.message;
-            subtitle-tracks: root.subtitle-tracks;
-            toggle-pause => { root.toggle-pause(); }
-            seek(t) => { root.seek(t); }
-            select-subtitle(id) => { root.select-subtitle(id); }
-            back => { root.back(); }
-            pip-active: root.pip-active;
-            toggle-pip => { root.toggle-pip(); }
+// Invisible strip along the PiP window's edge or corner that starts an OS resize
+// in `direction` (0 = north, then clockwise to 7 = north-west).
+component ResizeHandle inherits TouchArea {
+    in property <int> direction;
+    callback start(int);
+    pointer-event(e) => {
+        if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+            root.start(root.direction);
         }
     }
 }
 
-// Picture-in-picture: borderless, always on top, video only. Drag anywhere
-// to move, drag the corner to resize, double-click or "Exit" to return.
-export component PipWindow inherits Window {
-    title: "Enthuse";
-    no-frame: true;
-    always-on-top: true;
-    background: transparent;
-    preferred-width: 480px;
-    preferred-height: 270px;
-    min-width: 192px;
-    min-height: 108px;
+// Picture-in-picture controls, shown over the video while the main window
+// is the PiP mini player. Drag anywhere to move, drag an edge or corner to
+// resize, double-click or "Exit" to return.
+component PipOverlay inherits Rectangle {
 
     callback start-move();
-    callback start-resize();
+    callback move-by(length, length);
+    // Move through the window system (needed on Wayland) instead of moving
+    // the window ourselves. The OS move blocks the event loop on Windows,
+    // which stalls the video, so it is only used where needed.
+    in property <bool> os-move: false;
+    callback start-resize(int);
     callback exit-pip();
+
+    // Width of the resize strips along the edges, and size of the corners.
+    property <length> edge: 8px;
+    property <length> corner: 20px;
 
     property <bool> hover: move-area.has-hover || exit-touch.has-hover || grip-touch.has-hover;
 
     move-area := TouchArea {
         pointer-event(e) => {
-            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left && root.os-move) {
                 root.start-move();
             }
         }
+        // Our own move: the pointer stays at the same spot in the window, so
+        // its offset from the press point is how far to move.
+        moved => {
+            if (self.pressed && !root.os-move) {
+                root.move-by(self.mouse-x - self.pressed-x, self.mouse-y - self.pressed-y);
+            }
+        }
         double-clicked => { root.exit-pip(); }
+    }
+
+    // Edges first, then corners on top of them.
+    ResizeHandle {
+        x: root.corner; y: 0; width: root.width - 2 * root.corner; height: root.edge;
+        direction: 0; mouse-cursor: ns-resize; start(d) => { root.start-resize(d); }
+    }
+    ResizeHandle {
+        x: root.width - root.edge; y: root.corner; width: root.edge; height: root.height - 2 * root.corner;
+        direction: 2; mouse-cursor: ew-resize; start(d) => { root.start-resize(d); }
+    }
+    ResizeHandle {
+        x: root.corner; y: root.height - root.edge; width: root.width - 2 * root.corner; height: root.edge;
+        direction: 4; mouse-cursor: ns-resize; start(d) => { root.start-resize(d); }
+    }
+    ResizeHandle {
+        x: 0; y: root.corner; width: root.edge; height: root.height - 2 * root.corner;
+        direction: 6; mouse-cursor: ew-resize; start(d) => { root.start-resize(d); }
+    }
+    ResizeHandle {
+        x: root.width - root.corner; y: 0; width: root.corner; height: root.corner;
+        direction: 1; mouse-cursor: nesw-resize; start(d) => { root.start-resize(d); }
+    }
+    ResizeHandle {
+        x: 0; y: root.height - root.corner; width: root.corner; height: root.corner;
+        direction: 5; mouse-cursor: nesw-resize; start(d) => { root.start-resize(d); }
+    }
+    ResizeHandle {
+        x: 0; y: 0; width: root.corner; height: root.corner;
+        direction: 7; mouse-cursor: nwse-resize; start(d) => { root.start-resize(d); }
     }
 
     // Controls stay visible but fade back when the pointer is away, so the
@@ -656,9 +597,131 @@ export component PipWindow inherits Window {
             mouse-cursor: nwse-resize;
             pointer-event(e) => {
                 if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
-                    root.start-resize();
+                    root.start-resize(3);
                 }
             }
+        }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: root.page == 1 && root.video-title != "" ? root.video-title + " - Enthuse" : "Enthuse";
+    preferred-width: 640px;
+    preferred-height: 480px;
+    // PiP turns this window into a small borderless player on top, so the
+    // video never has to move to another window (which stalls mpv).
+    min-width: root.pip-active ? 192px : 360px;
+    min-height: root.pip-active ? 108px : 270px;
+    no-frame: root.pip-active;
+    always-on-top: root.pip-active;
+    background: transparent;
+    forward-focus: keys;
+
+    // 0 = folder browser, 1 = player.
+    in property <int> page;
+
+    in property <string> browser-heading;
+    in property <bool> browser-can-go-up;
+    in property <bool> browser-at-sources: true;
+    in property <[BrowserItem]> browser-items;
+    in property <bool> browser-loading;
+    in property <string> browser-error;
+    callback browser-up();
+    callback browser-activate(int);
+    callback browser-remove(int);
+    callback add-source(string);
+
+    in property <bool> paused;
+    in property <float> position;
+    in property <float> duration;
+    in property <string> position-text: "0:00";
+    in property <string> duration-text: "0:00";
+    in property <string> video-title;
+    in property <string> message;
+    in property <[TrackItem]> subtitle-tracks;
+    callback toggle-pause();
+    callback seek(float);
+    callback seek-relative(float);
+    callback select-subtitle(int);
+    callback back();
+    in property <bool> pip-active;
+    callback toggle-pip();
+    in property <bool> pip-os-move;
+    callback pip-start-move();
+    callback pip-move-by(length, length);
+    callback pip-start-resize(int);
+    // Rust-side plumbing: invoked on the UI thread when player events wait.
+    callback player-events-pending();
+
+    changed page => { keys.focus(); }
+
+    keys := FocusScope {
+        key-pressed(e) => {
+            if (root.page == 0) {
+                if (e.text == Key.Escape || e.text == Key.Backspace) {
+                    root.browser-up();
+                    return accept;
+                }
+                return reject;
+            }
+            if (e.text == " ") {
+                root.toggle-pause();
+                return accept;
+            }
+            if (e.text == Key.Escape) {
+                if (root.pip-active) {
+                    root.toggle-pip();
+                } else {
+                    root.back();
+                }
+                return accept;
+            }
+            if (e.text == Key.LeftArrow) {
+                root.seek-relative(-10);
+                return accept;
+            }
+            if (e.text == Key.RightArrow) {
+                root.seek-relative(10);
+                return accept;
+            }
+            reject
+        }
+
+        if root.page == 0: BrowserPage {
+            heading: root.browser-heading;
+            can-go-up: root.browser-can-go-up;
+            at-sources: root.browser-at-sources;
+            items: root.browser-items;
+            loading: root.browser-loading;
+            error: root.browser-error;
+            up => { root.browser-up(); }
+            activate(i) => { root.browser-activate(i); }
+            remove(i) => { root.browser-remove(i); }
+            add-source(path) => { root.add-source(path); }
+        }
+
+        if root.page == 1 && !root.pip-active: PlayerPage {
+            paused: root.paused;
+            position: root.position;
+            duration: root.duration;
+            position-text: root.position-text;
+            duration-text: root.duration-text;
+            title: root.video-title;
+            message: root.message;
+            subtitle-tracks: root.subtitle-tracks;
+            toggle-pause => { root.toggle-pause(); }
+            seek(t) => { root.seek(t); }
+            select-subtitle(id) => { root.select-subtitle(id); }
+            back => { root.back(); }
+            toggle-pip => { root.toggle-pip(); }
+        }
+
+        if root.page == 1 && root.pip-active: PipOverlay {
+            os-move: root.pip-os-move;
+            start-move => { root.pip-start-move(); }
+            move-by(dx, dy) => { root.pip-move-by(dx, dy); }
+            start-resize(d) => { root.pip-start-resize(d); }
+            exit-pip => { root.toggle-pip(); }
         }
     }
 }
