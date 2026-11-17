@@ -61,7 +61,14 @@ pub fn start(window: &AppWindow, player: Arc<dyn Player>, capture: ScreenCapture
             let finish = |ok: bool| {
                 result.0.set(Some(ok));
                 println!("self-test: {}", if ok { "PASS" } else { "FAIL" });
-                let _ = slint::quit_event_loop();
+                // Exit right away instead of through the normal shutdown: on
+                // the Windows CI runner the process hung after PASS while
+                // tearing down (#40). The check is done; shutdown is not
+                // what this test covers.
+                use std::io::Write;
+                let _ = std::io::stdout().flush();
+                let _ = std::io::stderr().flush();
+                std::process::exit(if ok { 0 } else { 1 });
             };
 
             if started.elapsed() > TIMEOUT {
