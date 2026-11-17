@@ -269,7 +269,7 @@ impl Playback {
             return;
         };
         let start = Some(self.position.get()).filter(|p| *p > 0.0);
-        self.open(&url, &title, start);
+        let _ = self.open(&url, &title, start);
     }
 
     /// Leaves full screen, e.g. when going back to the browser.
@@ -297,7 +297,9 @@ impl Playback {
     }
 
     /// Opens `url` and shows `title` (a file name) on the playback screen.
-    pub fn open(self: &Rc<Self>, url: &str, title: &str, start: Option<f64>) {
+    /// Opens `url`. An error the player reports at once shows on the
+    /// overlay and is returned too, so a caller can go back instead.
+    pub fn open(self: &Rc<Self>, url: &str, title: &str, start: Option<f64>) -> Result<(), String> {
         *self.last.borrow_mut() = Some((url.to_owned(), title.to_owned()));
         self.position.set(start.unwrap_or(0.0));
         if let Some(w) = self.window.upgrade() {
@@ -327,7 +329,9 @@ impl Playback {
         if let Err(err) = self.player.open(url, start) {
             let message: SharedString = format!("Cannot open this file: {err}").into();
             each_view!(self, w => w.set_message(message.clone()));
+            return Err(err.to_string());
         }
+        Ok(())
     }
 
     pub fn set_listener(&self, listener: EventListener) {

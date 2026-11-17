@@ -14,6 +14,8 @@ export global Tooltip {
     // Top left of the tip, in window coordinates.
     in-out property <length> x;
     in-out property <length> y;
+    // The bottom edge of the tip when it goes above the text instead.
+    in-out property <length> above;
     // Bumped while the TipText that set the tip is still hovered. When it
     // stops (the row was destroyed by a click, scrolled away), the layer
     // hides the tip.
@@ -27,7 +29,8 @@ export component TipText inherits Rectangle {
     in property <int> font-weight: Theme.body-weight;
     in property <bool> hovered;
 
-    property <bool> cut: label.preferred-width > root.width + 0.5px;
+    // The text doesn't fit and is ellipsized.
+    out property <bool> cut: label.preferred-width > root.width + 0.5px;
     property <bool> showing;
 
     min-width: 0;
@@ -55,6 +58,8 @@ export component TipText inherits Rectangle {
             Tooltip.text = root.text;
             Tooltip.x = root.absolute-position.x;
             Tooltip.y = root.absolute-position.y + root.height + Theme.space-8;
+            // Where to go instead when there is no room below.
+            Tooltip.above = root.absolute-position.y - Theme.space-8;
             Tooltip.alive += 1;
         }
     }
@@ -96,7 +101,10 @@ export component TooltipLayer inherits Rectangle {
     if Tooltip.text != "": Rectangle {
         property <length> w: min(tip-text.preferred-width + 2 * Theme.space-12, 520px, root.width - 2 * Theme.space-8);
         x: max(Theme.space-8, min(Tooltip.x - root.absolute-position.x, root.width - self.w - Theme.space-8));
-        y: Tooltip.y - root.absolute-position.y;
+        // Below the text, or above it when it would leave the window.
+        y: Tooltip.y - root.absolute-position.y + self.height > root.height - Theme.space-8
+            ? Tooltip.above - root.absolute-position.y - self.height
+            : Tooltip.y - root.absolute-position.y;
         width: self.w;
         height: tip-text.preferred-height + 2 * Theme.space-8;
         border-radius: Theme.radius-small;

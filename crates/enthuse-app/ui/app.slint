@@ -6,7 +6,7 @@ export { KeyFocus }
 import { ButtonVariant, IconButton, PillButton } from "components/buttons.slint";
 import { Section, Shell } from "components/sidebar.slint";
 import { FocusGrid } from "components/behavior.slint";
-import { TooltipLayer } from "components/tip-text.slint";
+import { Tooltip, TooltipLayer } from "components/tip-text.slint";
 import { BrowserModel, BrowserPage, Toast } from "browser.slint";
 import { HomeModel, HomePage } from "home.slint";
 import { PlayerModel, PlayerPage } from "player.slint";
@@ -562,7 +562,11 @@ export component AppWindow inherits Window {
     // Rust-side plumbing: invoked on the UI thread when player events wait.
     callback player-events-pending();
 
-    changed page => { keys.focus(); }
+    changed page => {
+        keys.focus();
+        // A tip from the browser must not linger over the player.
+        Tooltip.text = "";
+    }
     changed pip-active => { keys.focus(); }
     changed width => { PlayerModel.resized(); }
     changed height => { PlayerModel.resized(); }

@@ -152,7 +152,17 @@ impl Recent {
             items.push((source, path));
         }
         *self.items.borrow_mut() = items;
-        self.rows.set_vec(rows);
+        // In place when the length is the same (a position save while the
+        // list shows), so the rows, and keyboard focus, survive.
+        if rows.len() == self.rows.row_count() {
+            for (i, row) in rows.into_iter().enumerate() {
+                if self.rows.row_data(i).as_ref() != Some(&row) {
+                    self.rows.set_row_data(i, row);
+                }
+            }
+        } else {
+            self.rows.set_vec(rows);
+        }
         self.publish();
     }
 

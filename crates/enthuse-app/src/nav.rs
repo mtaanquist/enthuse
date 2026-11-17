@@ -148,7 +148,11 @@ impl Nav {
                 } else {
                     None
                 };
-                self.playback.open(&url, path.name().unwrap_or(&url), start);
+                if let Err(err) = self.playback.open(&url, path.name().unwrap_or(&url), start) {
+                    self.show_browser();
+                    self.browser.show_error(&cannot_play(&path, &err));
+                    return;
+                }
                 *self.next.borrow_mut() = None;
                 self.show_up_next(UpNextState::Hidden);
                 self.find_next(&source, &path);

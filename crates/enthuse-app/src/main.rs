@@ -153,7 +153,8 @@ fn run(
         });
         let output = video::VideoOutput::new(player.clone(), move || {
             if let Some((url, title)) = start {
-                playback.open(&url, &title, None);
+                // An error shows on the player's overlay.
+                let _ = playback.open(&url, &title, None);
             }
         });
         output.attach(&window, Some(capture.clone()))?;

@@ -72,7 +72,7 @@ export component Sidebar inherits Rectangle {
             compact: root.compact;
             active: root.section == Section.home;
             clicked => { root.navigate(Section.home); }
-            arrow(k) => { if (k == Key.DownArrow) { nav-browse.focus(); return true; } return false; }
+            arrow(k) => { if (k == Key.DownArrow) { nav-browse.focus(); } return k == Key.UpArrow || k == Key.DownArrow; }
         }
 
         nav-browse := NavItem {
@@ -101,7 +101,7 @@ export component Sidebar inherits Rectangle {
             compact: root.compact;
             active: root.section == Section.settings;
             clicked => { root.navigate(Section.settings); }
-            arrow(k) => { if (k == Key.UpArrow) { nav-recent.focus(); return true; } return false; }
+            arrow(k) => { if (k == Key.UpArrow) { nav-recent.focus(); } return k == Key.UpArrow || k == Key.DownArrow; }
         }
     }
 

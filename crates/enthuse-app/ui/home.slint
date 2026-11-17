@@ -191,17 +191,18 @@ component SourceTile inherits Rectangle {
             spacing: 2px;
             horizontal-stretch: 1;
 
-            TipText {
+            name := TipText {
                 text: root.item.name;
                 hovered: behavior.has-hover;
                 font-size: Theme.body-size;
                 font-weight: Theme.body-strong-weight;
             }
 
-            // Long paths: the full one in the tooltip.
+            // Long paths: the full one in the tooltip, unless the name is
+            // cut too (one tip at a time).
             TipText {
                 text: root.item.detail;
-                hovered: behavior.has-hover;
+                hovered: behavior.has-hover && !name.cut;
                 text-color: Theme.text-muted;
                 font-size: Theme.label-size;
             }
@@ -325,6 +326,16 @@ export component HomePage inherits Rectangle {
         root.focus-serial += 1;
     }
 
+    // Scrolls so an item `top` from the top of the visible area (negative
+    // when above it) and `h` tall is fully in view.
+    function reveal(top: length, h: length) {
+        if (top < 0) {
+            scroll.content-y = min(0px, scroll.content-y - top + Theme.space-16);
+        } else if (top + h > scroll.visible-height) {
+            scroll.content-y = scroll.content-y - (top + h - scroll.visible-height) - Theme.space-16;
+        }
+    }
+
     property <length> pad: root.width < 700px ? Theme.space-24 : Theme.content-padding-x;
     property <length> gap: Theme.space-24;
 
@@ -372,6 +383,7 @@ export component HomePage inherits Rectangle {
                         property <int> serial: root.focus-serial;
                         changed serial => {
                             if (root.focus-group == 0 && index == root.focus-target) {
+                                root.reveal(self.absolute-position.y - scroll.absolute-position.y, self.height);
                                 self.focus();
                             }
                         }
@@ -415,6 +427,7 @@ export component HomePage inherits Rectangle {
                         property <int> serial: root.focus-serial;
                         changed serial => {
                             if (root.focus-group == 1 && index == root.focus-target) {
+                                root.reveal(self.absolute-position.y - scroll.absolute-position.y, self.height);
                                 self.focus();
                             }
                         }
