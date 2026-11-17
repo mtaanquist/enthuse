@@ -10,6 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, OptionalExtension, params};
 
+use crate::settings::{self, FolderOverrides, PlaybackSettings};
 use crate::source::SourcePath;
 
 /// Fraction of a file that must be played before it counts as watched,
@@ -17,6 +18,7 @@ use crate::source::SourcePath;
 pub const DEFAULT_WATCHED_THRESHOLD: f64 = 0.9;
 
 const KEY_WATCHED_THRESHOLD: &str = "watched_threshold";
+const KEY_RESUME: &str = "resume";
 
 /// Storage error.
 #[derive(Debug)]
@@ -325,6 +327,94 @@ impl Store {
         )?;
         Ok(())
     }
+
+    fn setting(&self, key: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| {
+                r.get(0)
+            })
+            .optional()?)
+    }
+
+    fn set_setting(&self, key: &str, value: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
+    /// Global playback settings, used where no folder overrides them.
+    pub fn default_playback_settings(&self) -> Result<PlaybackSettings> {
+        let mut s = PlaybackSettings::default();
+        if let Some(v) = self.setting(KEY_RESUME)? {
+            s.resume = v != "0";
+        }
+        Ok(s)
+    }
+
+    pub fn set_default_resume(&self, resume: bool) -> Result<()> {
+        self.set_setting(KEY_RESUME, if resume { "1" } else { "0" })
+    }
+
+    /// The overrides stored for folders of `source`.
+    pub fn folder_overrides(
+        &self,
+        source: SourceId,
+    ) -> Result<HashMap<SourcePath, FolderOverrides>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT path, resume FROM folder_settings WHERE source_id = ?1")?;
+        let rows = stmt.query_map([source.0], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, Option<bool>>(1)?))
+        })?;
+        let mut out = HashMap::new();
+        for row in rows {
+            let (path, resume) = row?;
+            let path =
+                SourcePath::parse(&path).map_err(|e| StorageError::Corrupt(e.to_string()))?;
+            out.insert(path, FolderOverrides { resume });
+        }
+        Ok(out)
+    }
+
+    /// Sets `folder`'s own resume setting; `None` follows the parent again.
+    pub fn set_folder_resume(
+        &self,
+        source: SourceId,
+        folder: &SourcePath,
+        resume: Option<bool>,
+    ) -> Result<()> {
+        let o = FolderOverrides { resume };
+        if o.is_empty() {
+            self.conn.execute(
+                "DELETE FROM folder_settings WHERE source_id = ?1 AND path = ?2",
+                params![source.0, folder.as_str()],
+            )?;
+        } else {
+            self.conn.execute(
+                "INSERT INTO folder_settings (source_id, path, resume) VALUES (?1, ?2, ?3)
+                 ON CONFLICT (source_id, path) DO UPDATE SET resume = excluded.resume",
+                params![source.0, folder.as_str(), o.resume],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// The settings that apply to files in `folder`.
+    pub fn playback_settings(
+        &self,
+        source: SourceId,
+        folder: &SourcePath,
+    ) -> Result<PlaybackSettings> {
+        Ok(settings::resolve(
+            self.default_playback_settings()?,
+            folder,
+            &self.folder_overrides(source)?,
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -475,6 +565,38 @@ mod tests {
         s.save_position(src, &p("a.mkv"), 50.0, Some(100.0))
             .unwrap();
         assert!(s.watch_state(src, &p("a.mkv")).unwrap().unwrap().watched);
+    }
+
+    #[test]
+    fn resume_settings_per_folder() {
+        let s = store();
+        let id = s.add_source("local", "Media", "/media").unwrap();
+        let other = s.add_source("local", "Other", "/other").unwrap();
+        assert!(s.playback_settings(id, &p("Shows/A")).unwrap().resume);
+
+        s.set_folder_resume(id, &p("Shows"), Some(false)).unwrap();
+        assert!(!s.playback_settings(id, &p("Shows/A")).unwrap().resume);
+        assert!(s.playback_settings(id, &p("Movies")).unwrap().resume);
+        // Overrides belong to their source.
+        assert!(s.playback_settings(other, &p("Shows/A")).unwrap().resume);
+
+        s.set_default_resume(false).unwrap();
+        assert!(!s.playback_settings(id, &p("Movies")).unwrap().resume);
+        s.set_folder_resume(id, &p("Shows/A"), Some(true)).unwrap();
+        assert!(s.playback_settings(id, &p("Shows/A/S01")).unwrap().resume);
+
+        s.set_folder_resume(id, &p("Shows/A"), None).unwrap();
+        s.set_folder_resume(id, &p("Shows"), None).unwrap();
+        assert!(s.folder_overrides(id).unwrap().is_empty());
+
+        s.set_folder_resume(other, &SourcePath::root(), Some(false))
+            .unwrap();
+        s.remove_source(other).unwrap();
+        let count: i64 = s
+            .conn
+            .query_row("SELECT COUNT(*) FROM folder_settings", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
     }
 
     #[test]

@@ -30,6 +30,15 @@ pub fn migrations() -> Migrations<'static> {
                 value TEXT NOT NULL
             );",
         ),
+        // 2: per-folder playback settings. NULL means "same as the parent".
+        M::up(
+            "CREATE TABLE folder_settings (
+                source_id INTEGER NOT NULL REFERENCES sources (id) ON DELETE CASCADE,
+                path      TEXT NOT NULL,
+                resume    INTEGER,
+                PRIMARY KEY (source_id, path)
+            );",
+        ),
     ])
 }
 
