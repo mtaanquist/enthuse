@@ -26,6 +26,11 @@ const OBS_TRACK_COUNT: u64 = 4;
 const OBS_AID: u64 = 5;
 const OBS_SID: u64 = 6;
 const OBS_ASPECT: u64 = 7;
+const OBS_VOLUME: u64 = 8;
+const OBS_MUTE: u64 = 9;
+const OBS_SPEED: u64 = 10;
+const OBS_BUFFERING: u64 = 11;
+const OBS_CACHE_END: u64 = 12;
 
 /// Options applied before mpv starts. Callers can override them.
 const DEFAULT_OPTIONS: &[(&str, &str)] = &[
@@ -69,6 +74,11 @@ impl MpvPlayer {
         mpv.observe_property("aid", Format::String, OBS_AID)?;
         mpv.observe_property("sid", Format::String, OBS_SID)?;
         mpv.observe_property("video-params/aspect", Format::Double, OBS_ASPECT)?;
+        mpv.observe_property("volume", Format::Double, OBS_VOLUME)?;
+        mpv.observe_property("mute", Format::Flag, OBS_MUTE)?;
+        mpv.observe_property("speed", Format::Double, OBS_SPEED)?;
+        mpv.observe_property("paused-for-cache", Format::Flag, OBS_BUFFERING)?;
+        mpv.observe_property("demuxer-cache-time", Format::Double, OBS_CACHE_END)?;
 
         let wakeup: Arc<Mutex<Option<WakeupFn>>> = Arc::default();
         let slot = wakeup.clone();
@@ -133,6 +143,13 @@ fn translate(event: &Event<'_>) -> Option<PlayerEvent> {
                 Some(PlayerEvent::AspectChanged(Some(*a)))
             }
             (OBS_ASPECT, _) => Some(PlayerEvent::AspectChanged(None)),
+            (OBS_VOLUME, PropertyData::Double(v)) => Some(PlayerEvent::VolumeChanged(*v)),
+            (OBS_MUTE, PropertyData::Flag(m)) => Some(PlayerEvent::MuteChanged(*m)),
+            (OBS_SPEED, PropertyData::Double(s)) => Some(PlayerEvent::SpeedChanged(*s)),
+            (OBS_BUFFERING, PropertyData::Flag(b)) => Some(PlayerEvent::BufferingChanged(*b)),
+            // Unavailable (e.g. no file) reads as "not buffering".
+            (OBS_BUFFERING, _) => Some(PlayerEvent::BufferingChanged(false)),
+            (OBS_CACHE_END, d) => Some(PlayerEvent::BufferedChanged(as_seconds(d))),
             _ => None,
         },
         _ => None,
@@ -219,6 +236,14 @@ impl Player for MpvPlayer {
 
     fn set_volume(&self, percent: f64) -> Result<()> {
         Ok(self.mpv.set_property("volume", percent.clamp(0.0, 100.0))?)
+    }
+
+    fn set_muted(&self, muted: bool) -> Result<()> {
+        Ok(self.mpv.set_property("mute", muted)?)
+    }
+
+    fn set_speed(&self, speed: f64) -> Result<()> {
+        Ok(self.mpv.set_property("speed", speed.clamp(0.25, 4.0))?)
     }
 
     fn tracks(&self) -> Vec<Track> {
@@ -358,6 +383,18 @@ mod tests {
         assert_eq!(
             translate(&prop(OBS_ASPECT, PropertyData::None)),
             Some(PlayerEvent::AspectChanged(None))
+        );
+        assert_eq!(
+            translate(&prop(OBS_MUTE, PropertyData::Flag(true))),
+            Some(PlayerEvent::MuteChanged(true))
+        );
+        assert_eq!(
+            translate(&prop(OBS_BUFFERING, PropertyData::None)),
+            Some(PlayerEvent::BufferingChanged(false))
+        );
+        assert_eq!(
+            translate(&prop(OBS_CACHE_END, PropertyData::Double(80.0))),
+            Some(PlayerEvent::BufferedChanged(Some(80.0)))
         );
         assert_eq!(translate(&prop(99, PropertyData::Int64(1))), None);
         assert_eq!(translate(&Event::Seek), None);

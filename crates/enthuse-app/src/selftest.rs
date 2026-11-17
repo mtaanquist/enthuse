@@ -166,14 +166,14 @@ const VIDEO_PROBES: &[Probe] = &[
 /// Color tolerance per channel: YUV conversion and scaling shift colors a bit.
 const TOLERANCE: i32 = 48;
 
-/// A point on the play button's accent fill in logical pixels from the
-/// bottom-left corner: the gutter plus half a button across, and 20px below
-/// the button's center (half the bottom bar up), clear of the icon. See
-/// `Layout` in app.slint.
-const BUTTON_FROM_LEFT: f32 = 16.0 + 56.0 / 2.0;
-const BUTTON_FROM_BOTTOM: f32 = 96.0 / 2.0 - 20.0;
-/// `Theme.accent`.
-const BUTTON_RGB: [u8; 3] = [0x8e, 0xa2, 0xff];
+/// A point on the play button's white fill in logical pixels from the
+/// bottom-left corner: the padding plus half a button across, and 18px below
+/// the button's center, clear of the icon. See `PlayerLayout` in
+/// player.slint.
+const BUTTON_FROM_LEFT: f32 = 24.0 + 56.0 / 2.0;
+const BUTTON_FROM_BOTTOM: f32 = 24.0 + 56.0 / 2.0 - 18.0;
+/// `Theme.on-video`. The video under this point is the dark blue -I block.
+const BUTTON_RGB: [u8; 3] = [0xff, 0xff, 0xff];
 
 /// `scale` is the window's scale factor: snapshots are in physical pixels.
 fn check(snapshot: &SharedPixelBuffer<Rgba8Pixel>, scale: f32) -> Vec<String> {
