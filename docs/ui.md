@@ -120,7 +120,7 @@ The grid view shows the same items as 16:9 cards with the same badges.
 Video fills the window (drawn by libmpv under the Slint UI). Overlay, shown on mouse move or tap and hidden after 3 s without input while playing:
 1. Top: back to folder, title and episode line, PiP button.
 2. Bottom: Scrubber, then TransportBar.
-3. UpNextCard when the file is within its last 20 s and a next file exists in the folder. Counts down 10 s of playback (it pauses with the video), then marks the file watched and plays the next one. Cancel hides it for this file, and playback then stops at the end instead of going on. Seeking back out of the last 20 s hides it and restarts the countdown next time. Files of 20 s or less get no card. In PiP there is no card; the next file starts at the end as before.
+3. UpNextCard when the file is within its last 20 s, a next file exists in the folder and auto-next is on (Settings). Counts down 10 s of playback (it pauses with the video), then marks the file watched and plays the next one. Cancel hides it for this file, and playback then stops at the end instead of going on. Seeking back out of the last 20 s hides it and restarts the countdown next time. Files of 20 s or less get no card. In PiP there is no card; the next file starts at the end as before.
 
 Subtitles are rendered by mpv inside the video frame. The UI never draws them, and the overlay must not cover the bottom subtitle area when it can be avoided.
 
@@ -142,13 +142,26 @@ Video rows, grid cards, ContinueCards and the UpNextCard show a frame grabbed ab
 - One background worker grabs frames one at a time with a headless libmpv, so browsing never waits on it. Home cards and Up next go first, then the folder being browsed in listing order; leaving a folder drops its pending grabs.
 - Thumbnails are 256px wide JPEGs in the cache folder (`$XDG_CACHE_HOME/enthuse/thumbnails`, `%LOCALAPPDATA%\Enthuse\cache\thumbnails`), keyed by path, size and modification time, so a replaced file gets a new one. The ones used longest ago go when the cache passes 200 MB (checked at start and every 200 jobs). Files mpv can read but finds no frame in (empty, broken) are remembered and not tried again until they change; a grab that times out (20 s) or cannot read the file is tried again next session. A job stuck on a dead share is given up after 40 s so the rest keep coming, and Home asks for none from shares it found offline.
 - Squared pixels: anamorphic video (a 16:9 DVD) is scaled to its display aspect before the thumbnail is made.
-- Thumbnails for files on network shares can be turned off (setting `network_thumbnails`, shown in Settings with #69).
+- Thumbnails for files on network shares can be turned off in Settings (`network_thumbnails`).
 
 
 Decided 2026-11-17:
 - Main window: keep the native OS frame and request a dark title bar. No custom title bar for now.
 - PiP: frameless (`no-frame: true`), with our own controls and drag-to-move.
 - Fullscreen playback hides the frame.
+
+### Settings
+
+Sidebar, then one column (at most 820px wide) of grouped cards:
+1. Playback:
+   - "Resume where you left off" switch. It is the global default; folders can override it from the Resume button in Browse.
+   - "Play the next file automatically" switch. Off: no Up next card, and playback returns to the browser when a file ends. The next button still works.
+   - "Mark as watched": a segmented control (Percentage, Time left, Whichever first) and steppers for the share played (50% to 98%) and the time left (30 s to 15 min). Playing to the end always counts. The time-left test waits until at most a quarter of the file is left, so a short clip is not marked watched early.
+2. Folder settings: every folder with its own settings, as "Kids" over "NAS / Shows / Kids, resume off", with a "Clear" button. Editing stays in the browser.
+3. Thumbnails: "Thumbnails for network shares" switch (`network_thumbnails`).
+4. About: version, GPL-3.0, "Not affiliated with Firecore or Infuse."
+
+Every change is saved at once; there is no Save button.
 
 ## States not shown in the mockups
 

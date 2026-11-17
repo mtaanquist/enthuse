@@ -10,7 +10,7 @@ use enthuse_core::folder::{display_title, episode_label};
 use enthuse_core::next::next_video;
 use enthuse_core::resume::{SaveSchedule, start_position};
 use enthuse_core::source::SourcePath;
-use enthuse_core::storage::{DEFAULT_WATCHED_THRESHOLD, Store};
+use enthuse_core::storage::Store;
 use enthuse_core::up_next::{UpNext, UpNextState};
 use enthuse_player::{EndReason, Player, PlayerEvent};
 use slint::{ComponentHandle, Weak};
@@ -129,17 +129,14 @@ impl Nav {
         match source.source.playable(&path) {
             Ok(url) => {
                 let state = self.store.watch_state(source.id, &path).ok().flatten();
-                let threshold = self
-                    .store
-                    .watched_threshold()
-                    .unwrap_or(DEFAULT_WATCHED_THRESHOLD);
+                let rule = self.store.watched_rule().unwrap_or_default();
                 let folder = path.parent().unwrap_or_else(SourcePath::root);
                 let resume = self
                     .store
                     .playback_settings(source.id, &folder)
                     .map_or(true, |s| s.resume);
                 let start = if resume {
-                    start_position(state.as_ref(), threshold)
+                    start_position(state.as_ref(), &rule)
                 } else {
                     None
                 };
@@ -322,8 +319,9 @@ impl Nav {
             }
             PlayerEvent::PositionChanged(Some(p)) => {
                 // No card in PiP, and the countdown waits until PiP ends.
+                // None either with auto-next off: the file just ends.
                 let pip = self.window.upgrade().is_some_and(|w| w.get_pip_active());
-                let has_next = !pip && self.next.borrow().is_some();
+                let has_next = !pip && self.auto_next() && self.next.borrow().is_some();
                 let up_next = {
                     let mut current = self.current.borrow_mut();
                     let Some(current) = current.as_mut() else {
@@ -342,8 +340,12 @@ impl Nav {
         }
     }
 
+    fn auto_next(&self) -> bool {
+        self.store.auto_next().unwrap_or(true)
+    }
+
     /// The current file played to its end: mark it watched and go on to the
-    /// next one in its folder.
+    /// next one in its folder, unless auto-next is off.
     fn finished(self: &Rc<Self>) {
         let Some(current) = self.current.borrow_mut().take() else {
             self.show_browser();
@@ -351,7 +353,7 @@ impl Nav {
         };
         self.mark_watched(&current.source, &current.path);
         // Cancelling "Up next" turns auto-next off for this file.
-        if current.up_next.is_cancelled() {
+        if current.up_next.is_cancelled() || !self.auto_next() {
             self.show_browser();
         } else {
             self.play_next(current.source, current.path);

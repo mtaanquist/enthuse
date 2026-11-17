@@ -123,7 +123,7 @@ slint::slint! {
                 HorizontalLayout {
                     spacing: Theme.space-12;
                     alignment: start;
-                    for icon in [Icons.recent, Icons.settings, Icons.search, Icons.add, Icons.back, Icons.chevron-right, Icons.close,
+                    for icon in [Icons.recent, Icons.settings, Icons.search, Icons.add, Icons.minus, Icons.back, Icons.chevron-right, Icons.close,
                                  Icons.check, Icons.list, Icons.grid, Icons.drive, Icons.server, Icons.library, Icons.video, Icons.more]: Image {
                         width: Theme.icon-size-large; height: Theme.icon-size-large; source: icon; colorize: Theme.accent;
                     }
