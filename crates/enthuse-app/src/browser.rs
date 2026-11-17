@@ -3,10 +3,14 @@
 //! not freeze the UI.
 
 use std::cell::RefCell;
+use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use enthuse_core::resume::{Marker, marker};
 use enthuse_core::source::{Entry, EntryKind, LocalFs, Source, SourceError, SourcePath};
+use enthuse_core::storage::{SourceId, Store};
+use enthuse_core::time::format_time;
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel, Weak};
 
 use crate::{AppWindow, BrowserItem, bg};
@@ -15,13 +19,23 @@ const KIND_SOURCE: i32 = 0;
 const KIND_FOLDER: i32 = 1;
 const KIND_VIDEO: i32 = 2;
 
+/// Stored `kind` for [`LocalFs`] sources.
+const LOCAL: &str = "local";
+
+/// A source and its id in the database.
+#[derive(Clone)]
+pub struct SourceRef {
+    pub id: SourceId,
+    pub source: Arc<dyn Source>,
+}
+
 /// Called when the user picks a video.
-pub type PlayHandler = Box<dyn Fn(Arc<dyn Source>, SourcePath)>;
+pub type PlayHandler = Box<dyn Fn(SourceRef, SourcePath)>;
 
 struct SourceSlot {
-    source: Arc<dyn Source>,
+    source: SourceRef,
     /// Shown under the name, e.g. the folder path.
-    detail: String,
+    location: String,
 }
 
 /// Where the browser is: the source list, or a folder inside a source.
@@ -33,6 +47,7 @@ enum Location {
 
 pub struct Browser {
     window: Weak<AppWindow>,
+    store: Rc<Store>,
     sources: RefCell<Vec<SourceSlot>>,
     location: RefCell<Location>,
     entries: RefCell<Vec<Entry>>,
@@ -43,28 +58,30 @@ pub struct Browser {
 }
 
 impl Browser {
-    pub fn new(window: &AppWindow) -> Rc<Self> {
+    /// Shows the sources saved in `store`.
+    pub fn new(window: &AppWindow, store: Rc<Store>) -> Rc<Self> {
         let this = Rc::new(Self {
             window: window.as_weak(),
+            store,
             sources: Default::default(),
             location: RefCell::new(Location::Sources),
             entries: Default::default(),
             generation: Default::default(),
             on_play: Default::default(),
         });
+        this.load_sources();
 
         let b = this.clone();
         window.on_browser_activate(move |i| b.activate(i as usize));
         let b = this.clone();
         window.on_browser_up(move || b.up());
         let b = this.clone();
+        window.on_browser_remove(move |i| b.remove_source(i as usize));
+        let b = this.clone();
         window.on_add_source(move |path| {
-            let path = path.trim();
-            if !path.is_empty() {
-                b.add_local(path);
-                let last = b.sources.borrow().len() - 1;
+            if let Some(index) = b.add_local(path.trim()) {
                 b.navigate(Location::Folder {
-                    source: last,
+                    source: index,
                     path: SourcePath::root(),
                 });
             }
@@ -78,17 +95,81 @@ impl Browser {
         *self.on_play.borrow_mut() = Some(handler);
     }
 
-    /// Adds a local folder, mount or UNC path as a source. Sources live in
-    /// memory for now; storage (#8) persists them.
-    pub fn add_local(&self, path: &str) {
+    /// Adds and saves a local folder, mount or UNC path as a source, unless
+    /// it is already there. Returns its index in the source list.
+    pub fn add_local(&self, path: &str) -> Option<usize> {
+        if path.is_empty() {
+            return None;
+        }
+        if let Some(i) = self
+            .sources
+            .borrow()
+            .iter()
+            .position(|s| s.location == path)
+        {
+            return Some(i);
+        }
         let source = LocalFs::new(path);
+        let id = match self.store.add_source(LOCAL, &source.display_name(), path) {
+            Ok(id) => id,
+            Err(err) => {
+                self.show_error(&format!("Cannot save this source: {err}"));
+                return None;
+            }
+        };
         self.sources.borrow_mut().push(SourceSlot {
-            detail: source.root().display().to_string(),
-            source: Arc::new(source),
+            source: SourceRef {
+                id,
+                source: Arc::new(source),
+            },
+            location: path.to_owned(),
         });
         if matches!(*self.location.borrow(), Location::Sources) {
             self.show_sources();
         }
+        Some(self.sources.borrow().len() - 1)
+    }
+
+    /// Lists the current folder again, e.g. to update watched markers after
+    /// playback.
+    pub fn refresh(self: &Rc<Self>) {
+        let location = self.location.borrow().clone();
+        self.navigate(location);
+    }
+
+    fn load_sources(&self) {
+        let saved = match self.store.sources() {
+            Ok(saved) => saved,
+            Err(err) => {
+                self.show_error(&format!("Cannot load saved sources: {err}"));
+                return;
+            }
+        };
+        let mut sources = self.sources.borrow_mut();
+        for s in saved.into_iter().filter(|s| s.kind == LOCAL) {
+            sources.push(SourceSlot {
+                source: SourceRef {
+                    id: s.id,
+                    source: Arc::new(LocalFs::new(Path::new(&s.location))),
+                },
+                location: s.location,
+            });
+        }
+    }
+
+    fn remove_source(&self, index: usize) {
+        if !matches!(*self.location.borrow(), Location::Sources) {
+            return;
+        }
+        let Some(id) = self.sources.borrow().get(index).map(|s| s.source.id) else {
+            return;
+        };
+        if let Err(err) = self.store.remove_source(id) {
+            self.show_error(&format!("Cannot remove this source: {err}"));
+            return;
+        }
+        self.sources.borrow_mut().remove(index);
+        self.show_sources();
     }
 
     fn activate(self: &Rc<Self>, index: usize) {
@@ -154,22 +235,28 @@ impl Browser {
                 self.show_sources();
             }
             Location::Folder { source, path } => {
-                let slot = &self.sources.borrow()[source];
-                w.set_browser_heading(heading(&slot.source.display_name(), &path).into());
+                let sources = self.sources.borrow();
+                let Some(slot) = sources.get(source) else {
+                    return;
+                };
+                w.set_browser_heading(heading(&slot.source.source.display_name(), &path).into());
                 w.set_browser_can_go_up(true);
+                w.set_browser_at_sources(false);
                 w.set_browser_loading(true);
                 w.set_browser_items(ModelRc::default());
 
                 let src = slot.source.clone();
+                let id = src.id;
                 let this = Rc::downgrade(self);
+                let folder = path.clone();
                 bg::spawn(
-                    move || src.list(&path),
+                    move || src.source.list(&folder),
                     move |result| {
                         // Ignore a listing the user already navigated away from.
                         if let Some(this) = this.upgrade()
                             && *this.generation.borrow() == generation
                         {
-                            this.show_listing(result);
+                            this.show_listing(id, &path, result);
                         }
                     },
                 );
@@ -186,40 +273,72 @@ impl Browser {
             .borrow()
             .iter()
             .map(|s| BrowserItem {
-                label: s.source.display_name().into(),
-                detail: s.detail.clone().into(),
+                label: s.source.source.display_name().into(),
+                detail: s.location.as_str().into(),
                 kind: KIND_SOURCE,
+                progress: -1.0,
+                watched: false,
             })
             .collect();
         w.set_browser_heading("Sources".into());
         w.set_browser_can_go_up(false);
+        w.set_browser_at_sources(true);
         w.set_browser_items(ModelRc::new(VecModel::from(items)));
     }
 
-    fn show_listing(&self, result: Result<Vec<Entry>, SourceError>) {
+    fn show_listing(
+        &self,
+        source: SourceId,
+        folder: &SourcePath,
+        result: Result<Vec<Entry>, SourceError>,
+    ) {
         let Some(w) = self.window.upgrade() else {
             return;
         };
         w.set_browser_loading(false);
-        match result {
-            Ok(entries) => {
-                let items: Vec<_> = entries
-                    .iter()
-                    .map(|e| BrowserItem {
-                        label: e.name.as_str().into(),
-                        detail: SharedString::new(),
-                        kind: match e.kind {
-                            EntryKind::Folder => KIND_FOLDER,
-                            EntryKind::Video => KIND_VIDEO,
-                        },
-                    })
-                    .collect();
-                *self.entries.borrow_mut() = entries;
-                w.set_browser_items(ModelRc::new(VecModel::from(items)));
-            }
+        let entries = match result {
+            Ok(entries) => entries,
             Err(err) => {
                 w.set_browser_error(format!("Cannot open this folder: {err}").into());
+                return;
             }
+        };
+        // Markers are a nice-to-have: show the listing even if this fails.
+        let states = self.store.folder_states(source, folder).unwrap_or_default();
+        let items: Vec<_> = entries
+            .iter()
+            .map(|e| {
+                let mut item = BrowserItem {
+                    label: e.name.as_str().into(),
+                    detail: SharedString::new(),
+                    kind: KIND_FOLDER,
+                    progress: -1.0,
+                    watched: false,
+                };
+                if e.kind == EntryKind::Video {
+                    item.kind = KIND_VIDEO;
+                    match marker(states.get(&e.path)) {
+                        Marker::Unwatched => {}
+                        Marker::Watched => {
+                            item.watched = true;
+                            item.detail = "Watched".into();
+                        }
+                        Marker::InProgress { position, fraction } => {
+                            item.progress = fraction.unwrap_or(0.0) as f32;
+                            item.detail = format!("Resume at {}", format_time(position)).into();
+                        }
+                    }
+                }
+                item
+            })
+            .collect();
+        *self.entries.borrow_mut() = entries;
+        w.set_browser_items(ModelRc::new(VecModel::from(items)));
+    }
+
+    fn show_error(&self, message: &str) {
+        if let Some(w) = self.window.upgrade() {
+            w.set_browser_error(message.into());
         }
     }
 }
