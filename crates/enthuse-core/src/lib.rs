@@ -5,6 +5,7 @@
 //! unit tested on any platform.
 
 pub mod natsort;
+pub mod next;
 pub mod paths;
 pub mod source;
 pub mod time;
