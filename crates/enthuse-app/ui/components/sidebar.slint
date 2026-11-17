@@ -4,7 +4,7 @@
 import { Theme, Icons } from "../theme.slint";
 import { NavItem } from "nav-item.slint";
 
-// Top-level app sections. Keep in step with `Section` in src/shell.rs.
+// Top-level app sections. Rust reads and sets it as `AppWindow::section`.
 export enum Section {
     home,
     browse,
