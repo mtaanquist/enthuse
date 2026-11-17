@@ -3,7 +3,7 @@
 // shows when focus came from the keyboard. Place it as the last child, filling
 // its parent, and forward the parent's focus to it.
 
-import { Theme } from "../theme.slint";
+import { Theme, KeyFocus } from "../theme.slint";
 
 export component ButtonBehavior {
     in property <bool> enabled: true;
@@ -22,6 +22,10 @@ export component ButtonBehavior {
         enabled: root.enabled;
         mouse-cursor: root.enabled ? pointer : default;
         clicked => {
+            // A pointer click ends keyboard navigation: shortcuts apply again.
+            if (focus.has-focus) {
+                KeyFocus.restore();
+            }
             root.clicked();
         }
     }
@@ -41,6 +45,9 @@ export component ButtonBehavior {
         }
         key-pressed(event) => {
             if (event.text == Key.Return || event.text == " ") {
+                // The action may hide or destroy this button, which would
+                // leave no item to receive keys. Hand focus back first.
+                KeyFocus.restore();
                 root.clicked();
                 return accept;
             }

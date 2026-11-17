@@ -91,6 +91,14 @@ fn run(
 
     let store = Rc::new(open_store(self_test));
     let window = AppWindow::new()?;
+    {
+        let weak = window.as_weak();
+        window.global::<KeyFocus>().on_restore(move || {
+            if let Some(w) = weak.upgrade() {
+                w.invoke_focus_keys();
+            }
+        });
+    }
     let playback = playback::Playback::new(&window, player.clone());
     let browser = browser::Browser::new(&window, store.clone());
     for folder in folders {

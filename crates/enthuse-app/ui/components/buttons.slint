@@ -35,7 +35,11 @@ global ButtonFill {
             return down ? Theme.pressed(Theme.surface) : hover ? Theme.surface : transparent;
         }
         if (variant == ButtonVariant.overlay) {
-            return down ? rgba(255, 255, 255, 0.08) : hover ? rgba(255, 255, 255, 0.2) : Theme.overlay-button;
+            return down ? Theme.overlay-button-pressed : hover ? Theme.overlay-button-hover : Theme.overlay-button;
+        }
+        if (variant == ButtonVariant.light) {
+            // White can't get brighter: hover dims it slightly instead.
+            return down ? Theme.on-video.darker(0.2) : hover ? Theme.on-video.darker(0.08) : Theme.on-video;
         }
         down ? Theme.pressed(self.base(variant)) : hover ? Theme.hovered(self.base(variant)) : self.base(variant)
     }

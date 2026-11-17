@@ -22,6 +22,10 @@ export global Theme {
     out property <color> accent: #8ea2ff;
     out property <color> on-accent: #0f1115;
     out property <color> overlay-button: rgba(255, 255, 255, 0.12);
+    out property <color> overlay-button-hover: rgba(255, 255, 255, 0.2);
+    out property <color> overlay-button-pressed: rgba(255, 255, 255, 0.08);
+    // Hovered or selected rows in menus over video.
+    out property <color> overlay-row: rgba(255, 255, 255, 0.06);
     out property <color> overlay-card: rgba(18, 20, 25, 0.92);
     out property <color> danger: #f28b82;
     out property <brush> scrim-top: @linear-gradient(180deg, rgba(0, 0, 0, 0.65) 0%, rgba(0, 0, 0, 0) 100%);
@@ -93,6 +97,14 @@ export global Theme {
     public pure function pressed(c: color) -> color {
         c.darker(0.1)
     }
+}
+
+// Lets a button hand keyboard focus back to the window's own key handler
+// (shortcuts such as Space and Escape). Each window implements `restore`.
+// Without it, keys go nowhere once the focused button is clicked away,
+// hidden or destroyed.
+export global KeyFocus {
+    callback restore();
 }
 
 // Our own icon set: 24px grid, 1.75px stroke, drawn white and tinted with

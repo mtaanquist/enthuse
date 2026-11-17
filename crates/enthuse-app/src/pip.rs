@@ -19,7 +19,7 @@ use slint::{
 use crate::browser::{Browser, View};
 use crate::pip_geometry::{Edges, Rect, fit_aspect, resize};
 use crate::pointer;
-use crate::{AppWindow, BrowserWindow};
+use crate::{AppWindow, BrowserWindow, KeyFocus};
 
 /// PiP size when entering, in logical pixels; the video's ratio is fitted
 /// into it.
@@ -54,6 +54,14 @@ pub struct Pip {
 impl Pip {
     pub fn new(main: &AppWindow, browser: Rc<Browser>) -> Result<Rc<Self>, slint::PlatformError> {
         let side = BrowserWindow::new()?;
+        {
+            let weak = side.as_weak();
+            side.global::<KeyFocus>().on_restore(move || {
+                if let Some(w) = weak.upgrade() {
+                    w.invoke_focus_keys();
+                }
+            });
+        }
         browser.attach_side(&side);
         // The browser window stands in for the main window: closing it quits.
         side.window().on_close_requested(|| {
