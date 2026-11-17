@@ -1,0 +1,14 @@
+[package]
+name = "enthuse-player"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+libmpv2.workspace = true
+libmpv2-sys.workspace = true

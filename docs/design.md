@@ -67,8 +67,11 @@ The player draws subtitles into the video frame. The UI never draws them. This w
 
 ### Picture-in-picture
 
-- A second borderless, always-on-top, freely resizable window that reuses the same player instance. Don't hand playback over to a new player.
-- Keep the aspect ratio while resizing (on Windows, handle `WM_SIZING`).
+- The main window turns into a borderless, always-on-top, freely resizable mini player and back, reusing the same player instance. Don't hand playback over to a new player.
+- Meanwhile the browser opens in a second window at the main window's place and size (it draws no video, so it needs no mpv render context). On exit the video window takes the browser window's place and the browser window closes. To the user it looks as if the video popped out of the main window. Idea from Mads, 2026-11-17.
+- Resizing keeps the video's aspect ratio. When the next video has another ratio, the window is fitted to it without growing taller.
+- Not a second window (decided 2026-11-17, #49): mpv allows one render context and each window has its own GL context, so moving the video between windows makes mpv reinit and re-seek, which stalls playback for about half a second or more. A separate window stays open as an idea in #52.
+- Move and resize the window ourselves where possible, following the pointer's screen position: the OS move/resize loop on Windows blocks the event loop and makes the video stutter. Wayland needs the compositor's move and resize.
 - Hover overlay with play/pause and "back to full window".
 - Windows and X11 support always-on-top. Wayland doesn't let apps request it (KDE users can set a window rule; GNOME has no option). Degrade gracefully.
 

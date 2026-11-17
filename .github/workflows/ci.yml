@@ -1,0 +1,122 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "staging/**"]
+  pull_request:
+    branches: [main, "staging/**"]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Release tag of https://github.com/shinchiro/mpv-winbuild-cmake used for
+  # the Windows libmpv dev package. Empty means "latest" (printed in the log).
+  MPV_WINBUILD_TAG: "20261111"
+  # Release tag of https://github.com/pal1000/mesa-dist-win used for software
+  # OpenGL in the Windows self-test. Empty means "latest".
+  MESA_DIST_WIN_TAG: ""
+
+jobs:
+  check:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libmpv-dev libfontconfig1-dev libxkbcommon-dev \
+            xvfb libxkbcommon-x11-0 libgl1-mesa-dri
+
+      - name: Cache libmpv (Windows)
+        if: runner.os == 'Windows'
+        id: libmpv-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/libmpv
+          key: libmpv-${{ runner.os }}-${{ env.MPV_WINBUILD_TAG || github.run_id }}
+
+      - name: Fetch libmpv (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/fetch-libmpv.ps1 -Dest "${{ runner.temp }}/libmpv" -Tag "${{ env.MPV_WINBUILD_TAG }}"
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Self-test (Linux, Xvfb + Mesa llvmpipe)
+        if: runner.os == 'Linux'
+        timeout-minutes: 5
+        run: |
+          cargo build -p enthuse-app
+          xvfb-run -a -s "-screen 0 1280x1024x24" target/debug/enthuse --self-test
+
+      - name: Fetch Mesa software OpenGL (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $repo = "pal1000/mesa-dist-win"
+          $tag = "${{ env.MESA_DIST_WIN_TAG }}"
+          if (-not $tag) {
+            $tag = gh release view --repo $repo --json tagName --jq .tagName
+            Write-Host "MESA_DIST_WIN_TAG not set, using latest release: $tag"
+          }
+          $assets = gh release view $tag --repo $repo --json assets --jq '.assets[].name'
+          Write-Host "Assets in $repo@${tag}:"; $assets | ForEach-Object { Write-Host "  $_" }
+          # Desktop OpenGL (opengl32.dll) is not in every package; try the
+          # MSVC build first, then MinGW.
+          $dll = $null
+          foreach ($kind in 'msvc', 'mingw') {
+            $asset = $assets | Where-Object { $_ -match "^mesa3d-.*-release-$kind\.7z$" } | Select-Object -First 1
+            if (-not $asset) { continue }
+            $archive = Join-Path $env:RUNNER_TEMP $asset
+            gh release download $tag --repo $repo --pattern $asset --output $archive --clobber
+            $mesa = Join-Path $env:RUNNER_TEMP "mesa-$kind"
+            7z x $archive "-o$mesa" -y | Out-Null
+            $dll = Get-ChildItem $mesa -Recurse -Filter opengl32.dll |
+              Where-Object { $_.DirectoryName -match 'x64' } | Select-Object -First 1
+            if ($dll) { break }
+            Write-Host "No x64 opengl32.dll in $asset"
+          }
+          if (-not $dll) { throw "No x64 opengl32.dll in any Mesa package of $repo@$tag" }
+          Write-Host "Mesa DLLs: $($dll.DirectoryName)"
+          "MESA_X64=$($dll.DirectoryName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Self-test (Windows, Mesa llvmpipe)
+        if: runner.os == 'Windows'
+        timeout-minutes: 5
+        shell: pwsh
+        env:
+          GALLIUM_DRIVER: llvmpipe
+        run: |
+          cargo build -p enthuse-app
+          # opengl32.dll next to the exe takes precedence over the system one.
+          $dlls = Get-ChildItem $env:MESA_X64 -Filter *.dll
+          if (-not $dlls) { throw "No DLLs in $env:MESA_X64" }
+          $dlls | Copy-Item -Destination target\debug\ -PassThru | ForEach-Object { Write-Host "copied $($_.Name)" }
+          target\debug\enthuse.exe --self-test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
