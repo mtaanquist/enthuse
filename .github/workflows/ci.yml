@@ -15,6 +15,9 @@ env:
   # Release tag of https://github.com/shinchiro/mpv-winbuild-cmake used for
   # the Windows libmpv dev package. Empty means "latest" (printed in the log).
   MPV_WINBUILD_TAG: ""
+  # Release tag of https://github.com/pal1000/mesa-dist-win used for software
+  # OpenGL in the Windows self-test. Empty means "latest".
+  MESA_DIST_WIN_TAG: ""
 
 jobs:
   check:
@@ -34,7 +37,8 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libmpv-dev libfontconfig1-dev libxkbcommon-dev
+          sudo apt-get install -y libmpv-dev libfontconfig1-dev libxkbcommon-dev \
+            xvfb libxkbcommon-x11-0 libgl1-mesa-dri
 
       - name: Cache libmpv (Windows)
         if: runner.os == 'Windows'
@@ -61,3 +65,44 @@ jobs:
 
       - name: Test
         run: cargo test --workspace
+
+      - name: Self-test (Linux, Xvfb + Mesa llvmpipe)
+        if: runner.os == 'Linux'
+        timeout-minutes: 5
+        run: |
+          cargo build -p enthuse-app
+          xvfb-run -a -s "-screen 0 1280x1024x24" target/debug/enthuse --self-test
+
+      - name: Fetch Mesa software OpenGL (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $repo = "pal1000/mesa-dist-win"
+          $tag = "${{ env.MESA_DIST_WIN_TAG }}"
+          if (-not $tag) {
+            $tag = gh release view --repo $repo --json tagName --jq .tagName
+            Write-Host "MESA_DIST_WIN_TAG not set, using latest release: $tag"
+          }
+          $asset = gh release view $tag --repo $repo --json assets --jq '.assets[].name' |
+            Where-Object { $_ -match '^mesa3d-.*-release-msvc\.7z$' } | Select-Object -First 1
+          if (-not $asset) { throw "No release-msvc asset in $repo@$tag" }
+          $archive = Join-Path $env:RUNNER_TEMP $asset
+          gh release download $tag --repo $repo --pattern $asset --output $archive --clobber
+          $mesa = Join-Path $env:RUNNER_TEMP "mesa"
+          7z x $archive "-o$mesa" -y | Out-Null
+          "MESA_X64=$mesa\x64" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Self-test (Windows, Mesa llvmpipe)
+        if: runner.os == 'Windows'
+        timeout-minutes: 5
+        shell: pwsh
+        env:
+          GALLIUM_DRIVER: llvmpipe
+        run: |
+          cargo build -p enthuse-app
+          # opengl32.dll next to the exe takes precedence over the system one.
+          Copy-Item "$env:MESA_X64\*.dll" target\debug\
+          target\debug\enthuse.exe --self-test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
