@@ -13,7 +13,11 @@ mod video;
 
 use std::path::Path;
 use std::process::ExitCode;
+use std::rc::Rc;
 use std::sync::Arc;
+
+use enthuse_core::paths::AppDirs;
+use enthuse_core::storage::Store;
 
 use enthuse_player::{MpvPlayer, Player};
 
@@ -76,18 +80,14 @@ fn run(
     };
     let player: Arc<dyn Player> = Arc::new(MpvPlayer::new(options)?);
 
+    let store = Rc::new(open_store(self_test));
     let window = AppWindow::new()?;
     let playback = playback::Playback::new(&window, player.clone());
-    let browser = browser::Browser::new(&window);
+    let browser = browser::Browser::new(&window, store.clone());
     for folder in folders {
         browser.add_local(folder);
     }
-
-    let nav = nav::Nav::new(&window, player.clone(), playback.clone());
-    {
-        let nav = nav.clone();
-        browser.set_play_handler(Box::new(move |source, path| nav.play(source, path)));
-    }
+    let nav = nav::Nav::new(&window, player.clone(), playback.clone(), browser, store);
 
     let capture = video::ScreenCapture::default();
     // mpv needs the render context before a file is loaded, and the render
@@ -119,7 +119,25 @@ fn run(
     };
 
     window.run()?;
+    nav.save_position();
     Ok(outcome.exit_code())
+}
+
+/// Opens the database in the user's data folder. The self-test, or a
+/// failure to open it, uses a throwaway in-memory database instead.
+fn open_store(self_test: bool) -> Store {
+    if !self_test {
+        let opened = AppDirs::from_system()
+            .ok_or_else(|| "no home folder".to_string())
+            .and_then(|dirs| Store::open(&dirs.database_path()).map_err(|e| e.to_string()));
+        match opened {
+            Ok(store) => return store,
+            Err(err) => {
+                eprintln!("enthuse: cannot open the database, nothing will be saved: {err}")
+            }
+        }
+    }
+    Store::open_in_memory().expect("in-memory SQLite database")
 }
 
 /// File name for display, from a path or URL.

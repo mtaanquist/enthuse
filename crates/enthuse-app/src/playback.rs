@@ -11,8 +11,8 @@ use slint::{ComponentHandle, ModelRc, SharedString, VecModel, Weak};
 
 use crate::{AppWindow, TrackItem};
 
-/// Called when a file plays to its end (not when stopped).
-pub type EndOfFileHandler = Box<dyn Fn()>;
+/// Gets every player event after the playback screen has handled it.
+pub type EventListener = Box<dyn Fn(&PlayerEvent)>;
 
 /// Track id the UI uses for "subtitles off".
 const SUBTITLES_OFF: i32 = -1;
@@ -20,7 +20,7 @@ const SUBTITLES_OFF: i32 = -1;
 pub struct Playback {
     player: Arc<dyn Player>,
     window: Weak<AppWindow>,
-    on_end_of_file: RefCell<Option<EndOfFileHandler>>,
+    listener: RefCell<Option<EventListener>>,
 }
 
 impl Playback {
@@ -30,7 +30,7 @@ impl Playback {
         let this = Rc::new(Self {
             player: player.clone(),
             window: window.as_weak(),
-            on_end_of_file: RefCell::new(None),
+            listener: RefCell::new(None),
         });
 
         // mpv signals pending events from its own thread; drain them on the
@@ -90,17 +90,20 @@ impl Playback {
         }
     }
 
-    pub fn set_end_of_file_handler(&self, handler: EndOfFileHandler) {
-        *self.on_end_of_file.borrow_mut() = Some(handler);
+    pub fn set_listener(&self, listener: EventListener) {
+        *self.listener.borrow_mut() = Some(listener);
     }
 
     fn drain_events(&self) {
         while let Some(event) = self.player.poll_event() {
-            self.handle(event);
+            self.handle(&event);
+            if let Some(listener) = self.listener.borrow().as_ref() {
+                listener(&event);
+            }
         }
     }
 
-    fn handle(&self, event: PlayerEvent) {
+    fn handle(&self, event: &PlayerEvent) {
         let Some(w) = self.window.upgrade() else {
             return;
         };
@@ -119,13 +122,14 @@ impl Playback {
                 w.set_duration(d as f32);
                 w.set_duration_text(format_time(d).into());
             }
-            PlayerEvent::PauseChanged(paused) => w.set_paused(paused),
+            PlayerEvent::PauseChanged(paused) => w.set_paused(*paused),
             PlayerEvent::TracksChanged => self.refresh_tracks(&w),
-            PlayerEvent::Ended(EndReason::EndOfFile) => match self.on_end_of_file.borrow().as_ref()
-            {
-                Some(handler) => handler(),
-                None => w.set_message("Finished".into()),
-            },
+            // With a listener, auto-next takes over.
+            PlayerEvent::Ended(EndReason::EndOfFile) => {
+                if self.listener.borrow().is_none() {
+                    w.set_message("Finished".into());
+                }
+            }
             PlayerEvent::Ended(EndReason::Error(err)) => {
                 w.set_message(format!("Cannot play this file: {err}").into());
             }
