@@ -52,6 +52,10 @@ fn run(source: &str, self_test: bool) -> Result<ExitCode, Box<dyn std::error::Er
             init.set_option("hwdec", "no")?;
             // Allow Mesa's software OpenGL (llvmpipe), which mpv rejects by default.
             init.set_option("gpu-sw", "yes")?;
+            // mpv 0.37's full renderer on llvmpipe often draws only black
+            // (#27); the basic path is reliable and still exercises the
+            // render API and the compositing under Slint.
+            init.set_option("gpu-dumb-mode", "yes")?;
             // Print mpv's log so CI failures can be diagnosed.
             init.set_option("terminal", "yes")?;
             init.set_option("msg-level", "all=info")?;
