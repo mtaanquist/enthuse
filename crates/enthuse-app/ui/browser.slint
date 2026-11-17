@@ -3,9 +3,9 @@
 // browser; the screen only displays it.
 
 import { ListView, ScrollView, LineEdit } from "std-widgets.slint";
-import { Theme, Icons } from "theme.slint";
+import { Theme, Icons, KeyFocus } from "theme.slint";
 import { ButtonVariant, IconButton, PillButton } from "components/buttons.slint";
-import { ButtonBehavior } from "components/behavior.slint";
+import { ButtonBehavior, FocusGrid } from "components/behavior.slint";
 import { SegmentedControl } from "components/segmented-control.slint";
 
 // Kinds and badges, kept in step with browser.rs.
@@ -196,6 +196,8 @@ export component FileRow inherits Rectangle {
     in property <BrowserItem> item;
     in property <bool> removable;
     callback clicked();
+    // See ButtonBehavior.arrow.
+    callback arrow(string) -> bool;
     callback remove();
 
     property <bool> dim: root.item.badge == ItemBadge.watched;
@@ -278,6 +280,7 @@ export component FileRow inherits Rectangle {
         height: bg.height;
         ring-radius: Theme.radius-medium;
         clicked => { root.clicked(); }
+        arrow(k) => { return root.arrow(k); }
     }
 
     remove := IconButton {
@@ -291,10 +294,69 @@ export component FileRow inherits Rectangle {
     }
 }
 
+// A list of FileRows, also used by Recent. Arrow keys move focus between
+// rows and scroll the focused row into view.
+export component FileList inherits ListView {
+    in property <[BrowserItem]> items;
+    in property <bool> removable;
+    callback activate(int);
+    callback remove(int);
+
+    property <length> row-height: 64px + Theme.space-8;
+    // The row to focus, asked for by bumping the serial. A row scrolled
+    // into view focuses itself when it is created.
+    property <int> focus-target: -1;
+    property <int> focus-serial;
+    property <bool> focus-pending;
+    property <int> first-serial: KeyFocus.first-serial;
+    changed first-serial => {
+        self.move-to(max(0, min(root.items.length - 1, ceil(-self.content-y / self.row-height))));
+    }
+
+    function move-to(target: int) {
+        if (target < 0) {
+            return;
+        }
+        if (target * self.row-height < -self.content-y) {
+            self.content-y = -target * self.row-height;
+        } else if ((target + 1) * self.row-height > -self.content-y + self.visible-height) {
+            self.content-y = -((target + 1) * self.row-height - self.visible-height);
+        }
+        self.focus-target = target;
+        self.focus-pending = true;
+        self.focus-serial += 1;
+    }
+
+    for item[index] in root.items: FileRow {
+        property <int> serial: root.focus-serial;
+        changed serial => {
+            if (index == root.focus-target) {
+                root.focus-pending = false;
+                self.focus();
+            }
+        }
+        init => {
+            if (root.focus-pending && index == root.focus-target) {
+                root.focus-pending = false;
+                self.focus();
+            }
+        }
+        arrow(k) => {
+            root.move-to(FocusGrid.target(index, root.items.length, 1, k));
+            return true;
+        }
+        item: item;
+        removable: root.removable;
+        clicked => { root.activate(index); }
+        remove => { root.remove(index); }
+    }
+}
+
 // Grid view card: 16:9 thumbnail with the same badges.
 component FileCard inherits Rectangle {
     in property <BrowserItem> item;
     callback clicked();
+    callback arrow(string) -> bool;
 
     forward-focus: behavior;
     accessible-role: button;
@@ -359,6 +421,7 @@ component FileCard inherits Rectangle {
     behavior := ButtonBehavior {
         ring-radius: Theme.radius-medium;
         clicked => { root.clicked(); }
+        arrow(k) => { return root.arrow(k); }
     }
 }
 
@@ -564,13 +627,11 @@ export component BrowserPage inherits Rectangle {
                 back => { BrowserModel.up(); }
             }
 
-            if !BrowserModel.loading && BrowserModel.error == "" && BrowserModel.items.length > 0 && (BrowserModel.view-mode == 0 || BrowserModel.at-sources): ListView {
-                for item[index] in BrowserModel.items: FileRow {
-                    item: item;
-                    removable: BrowserModel.at-sources;
-                    clicked => { BrowserModel.activate(index); }
-                    remove => { BrowserModel.remove(index); }
-                }
+            if !BrowserModel.loading && BrowserModel.error == "" && BrowserModel.items.length > 0 && (BrowserModel.view-mode == 0 || BrowserModel.at-sources): FileList {
+                items: BrowserModel.items;
+                removable: BrowserModel.at-sources;
+                activate(i) => { BrowserModel.activate(i); }
+                remove(i) => { BrowserModel.remove(i); }
             }
 
             if !BrowserModel.loading && BrowserModel.error == "" && BrowserModel.items.length > 0 && BrowserModel.view-mode == 1 && !BrowserModel.at-sources: grid := ScrollView {
@@ -586,7 +647,38 @@ export component BrowserPage inherits Rectangle {
 
                 content-height: ceil(BrowserModel.items.length / self.columns) * (self.card-height + self.gap);
 
+                // Arrow keys, as in the list.
+                property <int> focus-target: -1;
+                property <int> focus-serial;
+                property <int> first-serial: KeyFocus.first-serial;
+                changed first-serial => {
+                    self.move-to(max(0, min(BrowserModel.items.length - 1, self.columns * ceil(-self.content-y / (self.card-height + self.gap)))));
+                }
+
+                function move-to(target: int) {
+                    if (target < 0) {
+                        return;
+                    }
+                    if (floor(target / self.columns) * (self.card-height + self.gap) < -self.content-y) {
+                        self.content-y = -floor(target / self.columns) * (self.card-height + self.gap);
+                    } else if (floor(target / self.columns) * (self.card-height + self.gap) + self.card-height > -self.content-y + self.visible-height) {
+                        self.content-y = -(floor(target / self.columns) * (self.card-height + self.gap) + self.card-height - self.visible-height);
+                    }
+                    self.focus-target = target;
+                    self.focus-serial += 1;
+                }
+
                 for item[index] in BrowserModel.items: FileCard {
+                    property <int> serial: grid.focus-serial;
+                    changed serial => {
+                        if (index == grid.focus-target) {
+                            self.focus();
+                        }
+                    }
+                    arrow(k) => {
+                        grid.move-to(FocusGrid.target(index, BrowserModel.items.length, grid.columns, k));
+                        return true;
+                    }
                     x: mod(index, grid.columns) * (grid.card-width + grid.gap);
                     y: floor(index / grid.columns) * (grid.card-height + grid.gap);
                     width: grid.card-width;

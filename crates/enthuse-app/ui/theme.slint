@@ -105,6 +105,12 @@ export global Theme {
 // hidden or destroyed.
 export global KeyFocus {
     callback restore();
+    // Bumped to ask the screen showing to focus its first visible item,
+    // e.g. on an arrow key while nothing has focus. Lists and grids watch it.
+    in-out property <int> first-serial;
+    public function focus-first() {
+        self.first-serial += 1;
+    }
 }
 
 // Our own icon set: 24px grid, 1.75px stroke, drawn white and tinted with

@@ -52,6 +52,7 @@ export component SegmentedControl inherits Rectangle {
 
             behavior := ButtonBehavior {
                 ring-radius: parent.border-radius;
+                keep-focus: true;
                 clicked => {
                     root.selected = index;
                     root.selected-changed(index);

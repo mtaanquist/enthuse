@@ -62,6 +62,8 @@ export component IconButton inherits Rectangle {
     in property <ButtonVariant> variant: ButtonVariant.outline;
     in property <bool> enabled: true;
     in property <length> size: root.variant == ButtonVariant.overlay ? Theme.overlay-button-size : Theme.touch-target;
+    // See ButtonBehavior.keep-focus.
+    in property <bool> keep-focus;
     in property <length> icon-size: root.size >= Theme.transport-button-size ? Theme.icon-size-large + 4px : root.size > Theme.touch-target ? Theme.icon-size-large : Theme.icon-size;
     out property <bool> has-hover: behavior.has-hover;
     callback clicked();
@@ -96,6 +98,7 @@ export component IconButton inherits Rectangle {
 
     behavior := ButtonBehavior {
         enabled: root.enabled;
+        keep-focus: root.keep-focus;
         ring-radius: root.border-radius;
         clicked => {
             root.clicked();

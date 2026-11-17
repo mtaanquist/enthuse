@@ -2,9 +2,8 @@
 // first. Rust fills RecentModel for each window; tapping a row plays or
 // resumes it.
 
-import { ListView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { BrowserItem, FileRow } from "browser.slint";
+import { BrowserItem, FileList } from "browser.slint";
 
 export global RecentModel {
     in property <[BrowserItem]> items;
@@ -40,13 +39,10 @@ export component RecentPage inherits Rectangle {
             wrap: word-wrap;
         }
 
-        if RecentModel.items.length > 0: ListView {
+        if RecentModel.items.length > 0: FileList {
             vertical-stretch: 1;
-
-            for item[index] in RecentModel.items: FileRow {
-                item: item;
-                clicked => { RecentModel.play(index); }
-            }
+            items: RecentModel.items;
+            activate(i) => { RecentModel.play(i); }
         }
 
         // Keeps the title at the top when the list is empty.

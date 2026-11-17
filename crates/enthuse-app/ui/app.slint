@@ -5,6 +5,7 @@ import { Theme, Icons, KeyFocus } from "theme.slint";
 export { KeyFocus }
 import { ButtonVariant, IconButton, PillButton } from "components/buttons.slint";
 import { Section, Shell } from "components/sidebar.slint";
+import { FocusGrid } from "components/behavior.slint";
 import { BrowserModel, BrowserPage, Toast } from "browser.slint";
 import { HomeModel, HomePage } from "home.slint";
 import { PlayerModel, PlayerPage } from "player.slint";
@@ -569,6 +570,12 @@ export component AppWindow inherits Window {
                 if (e.text == Key.Escape || e.text == Key.Backspace) {
                     return screens.back() ? EventResult.accept : EventResult.reject;
                 }
+                // Nothing focused, or a button that doesn't use arrows:
+                // start on the screen's first visible item.
+                if (FocusGrid.is-arrow(e.text)) {
+                    KeyFocus.focus-first();
+                    return accept;
+                }
                 return reject;
             }
             if (e.text == Key.Escape) {
@@ -692,6 +699,10 @@ export component BrowserWindow inherits Window {
         key-pressed(e) => {
             if (e.text == Key.Escape || e.text == Key.Backspace) {
                 return side-screens.back() ? EventResult.accept : EventResult.reject;
+            }
+            if (FocusGrid.is-arrow(e.text)) {
+                KeyFocus.focus-first();
+                return accept;
             }
             reject
         }
