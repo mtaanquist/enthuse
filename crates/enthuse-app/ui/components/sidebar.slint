@@ -1,0 +1,172 @@
+// Side navigation and the shell around the app screens. Below 900px wide
+// the sidebar collapses to an icon rail.
+
+import { Theme, Icons } from "../theme.slint";
+import { NavItem } from "nav-item.slint";
+
+// Top-level app sections. Rust reads and sets it as `AppWindow::section`.
+export enum Section {
+    home,
+    browse,
+    recent,
+    settings,
+}
+
+// Our own mark: the accent square with a play glyph.
+export component Logo inherits Rectangle {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    background: Theme.accent;
+
+    Image {
+        x: 9px;
+        width: 16px;
+        height: 16px;
+        source: Icons.play;
+        colorize: Theme.on-accent;
+    }
+}
+
+export component Sidebar inherits Rectangle {
+    in property <Section> section;
+    in property <bool> compact;
+    callback navigate(Section);
+
+    width: root.compact ? Theme.rail-width : Theme.sidebar-width;
+    background: Theme.sidebar;
+
+    // Placed explicitly, so its content does not size the sidebar: the
+    // width comes from `compact` alone.
+    VerticalLayout {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        padding-top: Theme.space-28;
+        padding-bottom: Theme.space-16;
+        padding-left: root.compact ? Theme.space-12 : Theme.space-16;
+        padding-right: root.compact ? Theme.space-12 : Theme.space-16;
+        spacing: Theme.space-4;
+
+        HorizontalLayout {
+            padding-left: root.compact ? 0px : Theme.space-12;
+            padding-bottom: Theme.space-36;
+            spacing: Theme.space-12;
+            alignment: root.compact ? center : start;
+
+            Logo { }
+
+            if !root.compact: Text {
+                text: "Enthuse";
+                color: Theme.text;
+                font-size: Theme.brand-size;
+                font-weight: Theme.brand-weight;
+                vertical-alignment: center;
+            }
+        }
+
+        NavItem {
+            icon: Icons.home;
+            text: "Home";
+            compact: root.compact;
+            active: root.section == Section.home;
+            clicked => { root.navigate(Section.home); }
+        }
+
+        NavItem {
+            icon: Icons.folder;
+            text: "Browse";
+            compact: root.compact;
+            active: root.section == Section.browse;
+            clicked => { root.navigate(Section.browse); }
+        }
+
+        NavItem {
+            icon: Icons.recent;
+            text: "Recent";
+            compact: root.compact;
+            active: root.section == Section.recent;
+            clicked => { root.navigate(Section.recent); }
+        }
+
+        Rectangle { }
+
+        NavItem {
+            icon: Icons.settings;
+            text: "Settings";
+            compact: root.compact;
+            active: root.section == Section.settings;
+            clicked => { root.navigate(Section.settings); }
+        }
+    }
+
+    // Divider on the right edge.
+    Rectangle {
+        x: parent.width - 1px;
+        width: 1px;
+        background: Theme.line;
+    }
+}
+
+// Sidebar on the left, the current screen in the rest.
+export component Shell inherits Rectangle {
+    in-out property <Section> section;
+    // Width below which the sidebar becomes an icon rail.
+    in property <length> narrow-width: 900px;
+    callback navigate(Section);
+
+    background: Theme.bg;
+
+    // Placed by hand rather than in a layout: the sidebar's width follows
+    // the window's width, which a layout would turn into a binding loop.
+    sidebar := Sidebar {
+        x: 0;
+        y: 0;
+        height: root.height;
+        section: root.section;
+        compact: root.width < root.narrow-width;
+        navigate(s) => {
+            root.section = s;
+            root.navigate(s);
+        }
+    }
+
+    Rectangle {
+        x: sidebar.width;
+        y: 0;
+        width: root.width - sidebar.width;
+        height: root.height;
+
+        @children
+    }
+}
+
+// Stand-in for screens that are built in later issues of M2.
+export component PlaceholderPage inherits Rectangle {
+    in property <string> title;
+    in property <string> text;
+
+    VerticalLayout {
+        padding-left: Theme.content-padding-x;
+        padding-right: Theme.content-padding-x;
+        padding-top: Theme.content-padding-top;
+        spacing: Theme.space-12;
+        alignment: start;
+
+        Text {
+            text: root.title;
+            color: Theme.text;
+            font-size: Theme.title-size;
+            font-weight: Theme.title-weight;
+            letter-spacing: Theme.title-letter-spacing;
+        }
+
+        Text {
+            text: root.text;
+            color: Theme.text-muted;
+            font-size: Theme.body-size;
+            wrap: word-wrap;
+        }
+    }
+}
