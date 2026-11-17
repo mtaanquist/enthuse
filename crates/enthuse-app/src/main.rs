@@ -133,7 +133,7 @@ fn run(
         });
         output.attach(&window, Some(capture.clone()))?;
     }
-    let pip = pip::Pip::new(&window, browser.clone())?;
+    let pip = pip::Pip::new(&window, browser.clone(), player.clone())?;
     playback.attach_side(pip.side());
     home.attach_side(pip.side());
     {

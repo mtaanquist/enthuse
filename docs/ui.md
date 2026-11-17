@@ -128,7 +128,12 @@ Keys: Space play or pause, Left and Right seek 10 s, Up and Down volume, F full 
 
 ### Picture-in-picture
 
-A separate borderless, always-on-top, freely resizable window that reuses the same player (see `docs/design.md`). Default size 560x315, bottom right of the current screen with a 48px margin. Aspect ratio is locked while resizing. Hover (or tap) shows PipControls; the progress line at the bottom stays visible. Drag anywhere outside a button to move the window. On Wayland, where always-on-top can't be requested, it is a normal borderless window.
+A separate borderless, always-on-top, freely resizable window that reuses the same player (see `docs/design.md`). Default size 560x315, bottom right of the current screen with a 48px margin. Aspect ratio is locked while resizing. Hover (or tap) shows PipControls; the progress line at the bottom stays visible. Drag anywhere outside a button to move the window. On Wayland, where always-on-top can't be requested, it is a normal borderless window (the README has a KDE window rule for it).
+
+- The main window itself becomes the PiP player, so the video never moves between windows (#52). Corners are rounded (12px) where the OS allows it (Windows 11); elsewhere they stay square. Its title is "Enthuse PiP" so window manager rules can match it.
+- Subtitles are drawn 1.7 times larger in PiP so they stay readable, and go back to normal on exit.
+- Double-click, back-to-window or Escape returns to the full window. Close stops playback.
+- The browser opens in a second window where the main window was, with a now-playing bar at the bottom: a seekable progress line along its top edge, back 10 s, play/pause, forward 30 s, title and time, "Back to video" and stop. Below 640px wide the seek buttons go and "Back to video" becomes an icon.
 
 ## Window chrome
 
