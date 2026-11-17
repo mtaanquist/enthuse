@@ -4,10 +4,10 @@
 //! Results come back on the UI thread to whoever listens.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::rc::{Rc, Weak};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::time::Duration;
 
 use enthuse_core::source::{Source, SourcePath, is_network_location};
@@ -17,6 +17,15 @@ use enthuse_player::thumbnail::{GrabError, grab_frame};
 
 /// Longest a single grab may take, e.g. on a slow share.
 const GRAB_TIMEOUT: Duration = Duration::from_secs(20);
+/// Longest a whole job may take. A dead share can hang a file lookup, or
+/// mpv's shutdown, past the grab's own timeout; the worker then gives up
+/// on that job and goes on, leaving the stuck thread behind.
+const JOB_LIMIT: Duration = Duration::from_secs(40);
+/// Decoded thumbnails kept in memory, so revisiting a folder or sorting
+/// it again does not decode them all on the UI thread.
+const DECODED_LIMIT: usize = 400;
+/// Prune the cache again after this many jobs, not only at start.
+const PRUNE_EVERY: u32 = 200;
 
 /// A file to make a thumbnail for.
 pub struct Job {
@@ -41,6 +50,8 @@ pub struct Thumbs {
     store: Rc<Store>,
     /// Results this session: the image file, or `None` when there is none.
     known: RefCell<HashMap<String, Option<PathBuf>>>,
+    /// Decoded images by id, oldest first in the order list.
+    decoded: RefCell<(HashMap<String, slint::Image>, VecDeque<String>)>,
     listeners: RefCell<Vec<Listener>>,
 }
 
@@ -71,6 +82,7 @@ impl Thumbs {
             shared,
             store,
             known: Default::default(),
+            decoded: Default::default(),
             listeners: Default::default(),
         });
         ACTIVE.with(|a| *a.borrow_mut() = Rc::downgrade(&this));
@@ -84,12 +96,27 @@ impl Thumbs {
 
     /// The thumbnail for `id`, if one has arrived this session.
     pub fn image(&self, id: &str) -> slint::Image {
-        self.known
-            .borrow()
-            .get(id)
-            .and_then(|p| p.as_deref())
-            .and_then(|p| slint::Image::load_from_path(p).ok())
-            .unwrap_or_default()
+        if let Some(image) = self.decoded.borrow().0.get(id) {
+            return image.clone();
+        }
+        let path = self.known.borrow().get(id).cloned().flatten();
+        path.and_then(|p| self.decode(id, &p)).unwrap_or_default()
+    }
+
+    /// Loads the image at `path` and keeps it for `id`.
+    fn decode(&self, id: &str, path: &std::path::Path) -> Option<slint::Image> {
+        let image = slint::Image::load_from_path(path).ok()?;
+        let mut decoded = self.decoded.borrow_mut();
+        let (map, order) = &mut *decoded;
+        if map.insert(id.to_owned(), image.clone()).is_none() {
+            order.push_back(id.to_owned());
+        }
+        while order.len() > DECODED_LIMIT {
+            if let Some(old) = order.pop_front() {
+                map.remove(&old);
+            }
+        }
+        Some(image)
     }
 
     /// Asks for a thumbnail ahead of the folder being browsed, for a card.
@@ -164,9 +191,7 @@ impl Thumbs {
 
     /// A result from the worker.
     fn done(&self, id: String, image: Option<PathBuf>) {
-        let loaded = image
-            .as_deref()
-            .and_then(|p| slint::Image::load_from_path(p).ok());
+        let loaded = image.as_deref().and_then(|p| self.decode(&id, p));
         self.known.borrow_mut().insert(id.clone(), image);
         if let Some(image) = loaded {
             for f in self.listeners.borrow().iter() {
@@ -188,6 +213,7 @@ fn run(shared: Arc<Shared>, cache: ThumbCache) {
     if let Err(err) = cache.prune(thumbs::CACHE_LIMIT) {
         eprintln!("enthuse: cannot clean up the thumbnail cache: {err}");
     }
+    let mut jobs = 0u32;
     loop {
         let (id, job) = {
             let Ok(mut q) = shared.queue.lock() else {
@@ -203,7 +229,25 @@ fn run(shared: Arc<Shared>, cache: ThumbCache) {
                 };
             }
         };
-        let image = make(&cache, &job);
+        // On a thread of its own, so a hung share cannot stop the worker.
+        let (tx, rx) = mpsc::channel();
+        let job_cache = cache.clone();
+        let started = std::thread::Builder::new()
+            .name("thumbnail".into())
+            .spawn(move || {
+                let _ = tx.send(make(&job_cache, &job));
+            });
+        let image = match started {
+            Ok(_) => rx.recv_timeout(JOB_LIMIT).ok().flatten(),
+            Err(_) => None,
+        };
+        if let Ok(mut q) = shared.queue.lock() {
+            q.finish();
+        }
+        jobs += 1;
+        if jobs.is_multiple_of(PRUNE_EVERY) {
+            let _ = cache.prune(thumbs::CACHE_LIMIT);
+        }
         let sent = slint::invoke_from_event_loop(move || {
             ACTIVE.with(|a| {
                 if let Some(thumbs) = a.borrow().upgrade() {
@@ -228,9 +272,9 @@ fn make(cache: &ThumbCache, job: &Job) -> Option<PathBuf> {
             let out = cache.image_path(&key);
             match grab_frame(&url, &out, thumbs::WIDTH, GRAB_TIMEOUT) {
                 Ok(()) => Some(out),
-                // A slow share: try again another time.
-                Err(GrabError::TimedOut) => None,
-                Err(GrabError::Failed(_)) => {
+                // A slow share or a passing error: try again another time.
+                Err(GrabError::TimedOut | GrabError::Unreadable(_)) => None,
+                Err(GrabError::NoFrame(_)) => {
                     let _ = cache.mark_failed(&key);
                     None
                 }

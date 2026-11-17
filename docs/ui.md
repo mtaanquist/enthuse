@@ -137,10 +137,11 @@ A separate borderless, always-on-top, freely resizable window that reuses the sa
 
 ### Thumbnails
 
-Video rows, grid cards, ContinueCards and the UpNextCard show a frame grabbed about 10% into the file (30% if that frame is black). Until one is ready, or when none can be made (an empty or broken file), they show the video icon.
+Video rows, grid cards, ContinueCards and the UpNextCard show a frame grabbed about 10% into the file (30% if that frame is black; the black one stays if that fails). Until one is ready, or when none can be made (an empty or broken file), they show the video icon.
 
 - One background worker grabs frames one at a time with a headless libmpv, so browsing never waits on it. Home cards and Up next go first, then the folder being browsed in listing order; leaving a folder drops its pending grabs.
-- Thumbnails are 256px wide JPEGs in the cache folder (`$XDG_CACHE_HOME/enthuse/thumbnails`, `%LOCALAPPDATA%\Enthuse\cache\thumbnails`), keyed by path, size and modification time, so a replaced file gets a new one. The oldest go when the cache passes 200 MB. Files that fail are remembered and not tried again; a grab that times out (20 s, a slow share) is tried again next time.
+- Thumbnails are 256px wide JPEGs in the cache folder (`$XDG_CACHE_HOME/enthuse/thumbnails`, `%LOCALAPPDATA%\Enthuse\cache\thumbnails`), keyed by path, size and modification time, so a replaced file gets a new one. The ones used longest ago go when the cache passes 200 MB (checked at start and every 200 jobs). Files mpv can read but finds no frame in (empty, broken) are remembered and not tried again until they change; a grab that times out (20 s) or cannot read the file is tried again next session. A job stuck on a dead share is given up after 40 s so the rest keep coming, and Home asks for none from shares it found offline.
+- Squared pixels: anamorphic video (a 16:9 DVD) is scaled to its display aspect before the thumbnail is made.
 - Thumbnails for files on network shares can be turned off (setting `network_thumbnails`, shown in Settings with #69).
 
 

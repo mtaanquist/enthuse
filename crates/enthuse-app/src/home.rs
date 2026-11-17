@@ -159,12 +159,15 @@ impl Home {
                 continue;
             };
             let name = path.name().unwrap_or_default().to_owned();
+            let offline = self.offline.borrow().get(&id).copied().unwrap_or(false);
             let thumbnail = match &thumbs {
-                Some(t) => {
+                // An offline share could only hang the worker.
+                Some(t) if !offline => {
                     let location = locations.get(&id).map_or("", String::as_str);
                     t.want(id, &source.source, location, &path);
                     t.image(&thumb_id(id, &path))
                 }
+                Some(t) => t.image(&thumb_id(id, &path)),
                 None => Default::default(),
             };
             cards.push(ContinueItem {

@@ -67,9 +67,14 @@ impl ThumbCache {
         self.dir.join(format!("{key}.failed"))
     }
 
+    /// What there is for `key`. A thumbnail found is marked as used, so
+    /// [`Self::prune`] removes the ones not looked at for longest.
     pub fn lookup(&self, key: &str) -> Lookup {
         let image = self.image_path(key);
         if image.is_file() {
+            if let Ok(f) = fs::File::options().write(true).open(&image) {
+                let _ = f.set_modified(SystemTime::now());
+            }
             Lookup::Ready(image)
         } else if self.failed_path(key).is_file() {
             Lookup::Failed
@@ -84,15 +89,21 @@ impl ThumbCache {
         fs::write(self.failed_path(key), b"")
     }
 
-    /// Removes the oldest entries until the cache holds at most `limit`
-    /// bytes. Returns how many were removed. Other files are left alone.
+    /// Removes the thumbnails used longest ago until the cache holds at
+    /// most `limit` bytes, and scratch folders a grab left behind (the app
+    /// quit mid-grab). Returns how many thumbnails were removed. Failure
+    /// markers take no room and stay; other files are left alone.
     pub fn prune(&self, limit: u64) -> io::Result<usize> {
         let mut entries: Vec<(SystemTime, u64, PathBuf)> = match fs::read_dir(&self.dir) {
             Ok(dir) => dir
                 .filter_map(|e| e.ok())
                 .filter(|e| {
                     let p = e.path();
-                    p.extension().is_some_and(|x| x == "jpg" || x == "failed")
+                    let scratch = e.file_name().to_string_lossy().starts_with(".grab-");
+                    if scratch && p.is_dir() {
+                        let _ = fs::remove_dir_all(&p);
+                    }
+                    !scratch && p.extension().is_some_and(|x| x == "jpg")
                 })
                 .filter_map(|e| {
                     let meta = e.metadata().ok()?;
@@ -127,6 +138,8 @@ impl ThumbCache {
 pub struct ThumbQueue<T> {
     urgent: VecDeque<(String, T)>,
     folder: VecDeque<(String, T)>,
+    /// The job being worked on, so it isn't queued again meanwhile.
+    running: Option<String>,
 }
 
 impl<T> Default for ThumbQueue<T> {
@@ -134,6 +147,7 @@ impl<T> Default for ThumbQueue<T> {
         Self {
             urgent: VecDeque::new(),
             folder: VecDeque::new(),
+            running: None,
         }
     }
 }
@@ -145,7 +159,7 @@ impl<T> ThumbQueue<T> {
 
     /// Adds a job ahead of the folder's, unless it is already waiting there.
     pub fn push_urgent(&mut self, id: String, job: T) {
-        if self.urgent.iter().any(|(i, _)| *i == id) {
+        if self.running.as_ref() == Some(&id) || self.urgent.iter().any(|(i, _)| *i == id) {
             return;
         }
         self.folder.retain(|(i, _)| *i != id);
@@ -156,20 +170,29 @@ impl<T> ThumbQueue<T> {
     pub fn set_folder(&mut self, jobs: Vec<(String, T)>) {
         self.folder.clear();
         for (id, job) in jobs {
-            let waiting = self
-                .urgent
-                .iter()
-                .chain(&self.folder)
-                .any(|(i, _)| *i == id);
+            let waiting = self.running.as_ref() == Some(&id)
+                || self
+                    .urgent
+                    .iter()
+                    .chain(&self.folder)
+                    .any(|(i, _)| *i == id);
             if !waiting {
                 self.folder.push_back((id, job));
             }
         }
     }
 
-    /// The next job: urgent ones first.
+    /// The next job: urgent ones first. It counts as running until
+    /// [`Self::finish`].
     pub fn pop(&mut self) -> Option<(String, T)> {
-        self.urgent.pop_front().or_else(|| self.folder.pop_front())
+        let next = self.urgent.pop_front().or_else(|| self.folder.pop_front());
+        self.running = next.as_ref().map(|(id, _)| id.clone());
+        next
+    }
+
+    /// The running job is done.
+    pub fn finish(&mut self) {
+        self.running = None;
     }
 
     pub fn len(&self) -> usize {
@@ -247,11 +270,34 @@ mod tests {
                 .unwrap();
         }
         fs::write(t.0.join("notes.txt"), [0u8; 50]).unwrap();
+        cache.mark_failed("broken").unwrap();
+        fs::create_dir_all(t.0.join(".grab-1-2")).unwrap();
         assert_eq!(cache.prune(20).unwrap(), 1);
         assert!(!t.0.join("old.jpg").exists());
         assert!(t.0.join("mid.jpg").exists());
         assert!(t.0.join("notes.txt").exists());
+        assert_eq!(cache.lookup("broken"), Lookup::Failed);
+        assert!(!t.0.join(".grab-1-2").exists());
         assert_eq!(cache.prune(100).unwrap(), 0);
+    }
+
+    #[test]
+    fn a_lookup_keeps_a_thumbnail_from_pruning() {
+        let t = TempDir::new("touch");
+        let cache = ThumbCache::new(&t.0);
+        let old = SystemTime::now() - std::time::Duration::from_secs(1000);
+        for (name, age) in [("a", 0), ("b", 100)] {
+            let path = cache.image_path(name);
+            fs::write(&path, [0u8; 10]).unwrap();
+            let f = fs::File::options().write(true).open(&path).unwrap();
+            f.set_modified(old + std::time::Duration::from_secs(age))
+                .unwrap();
+        }
+        // "a" is older, but just used.
+        assert!(matches!(cache.lookup("a"), Lookup::Ready(_)));
+        assert_eq!(cache.prune(10).unwrap(), 1);
+        assert!(cache.image_path("a").exists());
+        assert!(!cache.image_path("b").exists());
     }
 
     #[test]
@@ -270,6 +316,19 @@ mod tests {
         q.set_folder(vec![("x".into(), 9)]);
         assert_eq!(q.pop(), Some(("x".into(), 9)));
         assert!(q.is_empty());
+    }
+
+    #[test]
+    fn a_running_job_is_not_queued_again() {
+        let mut q = ThumbQueue::new();
+        q.push_urgent("a".into(), 1);
+        assert_eq!(q.pop(), Some(("a".into(), 1)));
+        q.push_urgent("a".into(), 1);
+        q.set_folder(vec![("a".into(), 1)]);
+        assert!(q.is_empty());
+        q.finish();
+        q.push_urgent("a".into(), 1);
+        assert_eq!(q.len(), 1);
     }
 
     #[test]
