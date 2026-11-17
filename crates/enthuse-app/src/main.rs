@@ -7,6 +7,7 @@
 mod bg;
 mod browser;
 mod nav;
+mod pip;
 mod playback;
 mod selftest;
 mod video;
@@ -89,23 +90,25 @@ fn run(
     // mpv needs the render context before a file is loaded, and the render
     // context needs Slint's GL context, which exists once the window is shown.
     // Files picked in the browser come later, so only the start file waits.
-    {
+    let output = {
         let playback = playback.clone();
         let start = play.map(|url| {
             window.set_page(nav::PAGE_PLAYER);
             let title = title_for(&url);
             (url, title)
         });
-        video::attach(
-            &window,
-            player.clone(),
-            move || {
-                if let Some((url, title)) = start {
-                    playback.open(&url, &title, None);
-                }
-            },
-            capture.clone(),
-        )?;
+        let output = video::VideoOutput::new(player.clone(), move || {
+            if let Some((url, title)) = start {
+                playback.open(&url, &title, None);
+            }
+        });
+        output.attach(&window, Some(capture.clone()))?;
+        output
+    };
+    let pip = pip::Pip::new(&window, output)?;
+    {
+        let pip = pip.clone();
+        nav.set_on_leave_player(Box::new(move || pip.exit()));
     }
 
     let outcome = if self_test {

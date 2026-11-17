@@ -124,12 +124,20 @@ component PlayerPage inherits Rectangle {
     in property <string> title;
     in property <string> message;
     in property <[TrackItem]> subtitle-tracks;
+    in property <bool> pip-active;
     callback toggle-pause();
     callback seek(float);
     callback select-subtitle(int);
     callback back();
+    callback toggle-pip();
 
     property <bool> show-subtitles;
+
+    if root.pip-active: Text {
+        text: "Playing in picture-in-picture";
+        color: Palette.muted;
+        font-size: 16px;
+    }
 
     // Top bar: back and title.
     Rectangle {
@@ -195,8 +203,15 @@ component PlayerPage inherits Rectangle {
             clicked => { root.show-subtitles = !root.show-subtitles; }
         }
 
-        time := Text {
+        pip := IconButton {
             x: subs.x - self.width - Layout.gutter;
+            y: (parent.height - self.height) / 2;
+            label: "PiP";
+            clicked => { root.toggle-pip(); }
+        }
+
+        time := Text {
+            x: pip.x - self.width - Layout.gutter;
             width: 130px;
             text: root.position-text + " / " + root.duration-text;
             color: Palette.muted;
@@ -497,6 +512,8 @@ export component AppWindow inherits Window {
     callback seek-relative(float);
     callback select-subtitle(int);
     callback back();
+    in property <bool> pip-active;
+    callback toggle-pip();
     // Rust-side plumbing: invoked on the UI thread when player events wait.
     callback player-events-pending();
 
@@ -556,6 +573,92 @@ export component AppWindow inherits Window {
             seek(t) => { root.seek(t); }
             select-subtitle(id) => { root.select-subtitle(id); }
             back => { root.back(); }
+            pip-active: root.pip-active;
+            toggle-pip => { root.toggle-pip(); }
+        }
+    }
+}
+
+// Picture-in-picture: borderless, always on top, video only. Drag anywhere
+// to move, drag the corner to resize, double-click or "Exit" to return.
+export component PipWindow inherits Window {
+    title: "Enthuse";
+    no-frame: true;
+    always-on-top: true;
+    background: transparent;
+    preferred-width: 480px;
+    preferred-height: 270px;
+    min-width: 192px;
+    min-height: 108px;
+
+    callback start-move();
+    callback start-resize();
+    callback exit-pip();
+
+    property <bool> hover: move-area.has-hover || exit-touch.has-hover || grip-touch.has-hover;
+
+    move-area := TouchArea {
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                root.start-move();
+            }
+        }
+        double-clicked => { root.exit-pip(); }
+    }
+
+    // Controls stay visible but fade back when the pointer is away, so the
+    // window stays usable on touch screens.
+    exit := Rectangle {
+        x: parent.width - self.width - 8px;
+        y: 8px;
+        width: 64px;
+        height: 36px;
+        border-radius: 18px;
+        background: exit-touch.pressed ? Palette.accent-pressed : Palette.accent;
+        opacity: root.hover ? 1.0 : 0.5;
+
+        Text {
+            text: "Exit";
+            color: Palette.text;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        exit-touch := TouchArea {
+            clicked => { root.exit-pip(); }
+        }
+    }
+
+    grip := Rectangle {
+        x: parent.width - self.width;
+        y: parent.height - self.height;
+        width: 32px;
+        height: 32px;
+        opacity: root.hover ? 1.0 : 0.5;
+
+        // Our own corner mark: two short bars.
+        Rectangle {
+            x: 10px;
+            y: 22px;
+            width: 16px;
+            height: 3px;
+            background: Palette.text;
+        }
+        Rectangle {
+            x: 23px;
+            y: 9px;
+            width: 3px;
+            height: 16px;
+            background: Palette.text;
+        }
+
+        grip-touch := TouchArea {
+            mouse-cursor: nwse-resize;
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                    root.start-resize();
+                }
+            }
         }
     }
 }

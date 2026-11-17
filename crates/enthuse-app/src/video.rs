@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use enthuse_player::{Player, VideoRenderer};
+use enthuse_player::{Player, TrackKind, VideoRenderer};
 use glow::HasContext;
 use slint::{ComponentHandle, GraphicsAPI, RenderingState, Rgba8Pixel, SharedPixelBuffer};
 
@@ -45,92 +45,249 @@ impl ScreenCapture {
     }
 }
 
-/// Installs a rendering notifier on `window` that draws the current mpv
-/// frame before Slint draws its own items.
+/// The video output shared by the app's windows (main window and PiP).
 ///
-/// `on_ready` runs once the mpv render context exists; load media only after
-/// that, or mpv fails to open its video output.
-pub fn attach<C: ComponentHandle + 'static>(
-    component: &C,
-    player: Arc<dyn Player>,
-    on_ready: impl FnOnce() + 'static,
-    capture: ScreenCapture,
-) -> Result<(), slint::SetRenderingNotifierError> {
-    let mut on_ready = Some(on_ready);
-    let weak = component.as_weak();
-    let mut state: Option<(Box<dyn VideoRenderer>, glow::Context)> = None;
+/// mpv allows one render context at a time, so only the active window owns
+/// one. Moving the video to another window frees the render context in the
+/// old window (with its GL context current) before the new window creates
+/// its own; playback itself continues.
+#[derive(Clone)]
+pub struct VideoOutput(Rc<RefCell<Output>>);
 
-    component
-        .window()
-        .set_rendering_notifier(move |rendering_state, graphics_api| match rendering_state {
-            RenderingState::RenderingSetup => {
-                let GraphicsAPI::NativeOpenGL { get_proc_address } = graphics_api else {
-                    eprintln!("video: renderer is not OpenGL, video cannot be drawn");
-                    return;
-                };
-                // SAFETY: Slint calls the notifier on the UI thread with its GL
-                // context current, and all later calls (render, drop on
-                // teardown) happen there as well.
-                let gl = unsafe {
-                    glow::Context::from_loader_function_cstr(|name| get_proc_address(name))
-                };
-                // SAFETY: as above.
-                match unsafe { player.create_renderer(get_proc_address) } {
-                    Ok(mut ctx) => {
-                        let weak = weak.clone();
-                        ctx.set_update_callback(Box::new(move || {
-                            let weak = weak.clone();
-                            // Called on an mpv thread: hop to the UI thread to redraw.
-                            let _ = slint::invoke_from_event_loop(move || {
-                                if let Some(c) = weak.upgrade() {
-                                    c.window().request_redraw();
-                                }
-                            });
-                        }));
-                        state = Some((ctx, gl));
-                        if let Some(f) = on_ready.take() {
-                            f();
-                        }
-                    }
-                    Err(err) => eprintln!("video: {err}"),
-                }
+struct Output {
+    player: Arc<dyn Player>,
+    /// The window that should show the video.
+    active: usize,
+    /// The window that owns the render context right now, if any.
+    holder: Option<usize>,
+    /// Requests a redraw of each attached window, by id.
+    redraw: Vec<Rc<dyn Fn()>>,
+    /// Runs when the first render context exists.
+    on_ready: Option<Box<dyn FnOnce()>>,
+    /// Runs when the video arrived in the window `move_to` asked for.
+    on_moved: Option<Box<dyn FnOnce()>>,
+    /// Video track to select again once the new render context exists.
+    restore_video: Option<i64>,
+}
+
+/// Per-window GL state, owned by that window's rendering notifier.
+struct WindowVideo {
+    gl: glow::Context,
+    renderer: Option<Box<dyn VideoRenderer>>,
+}
+
+impl VideoOutput {
+    /// `on_ready` runs once the first mpv render context exists; load media
+    /// only after that, or mpv fails to open its video output.
+    pub fn new(player: Arc<dyn Player>, on_ready: impl FnOnce() + 'static) -> Self {
+        Self(Rc::new(RefCell::new(Output {
+            player,
+            active: 0,
+            holder: None,
+            redraw: Vec::new(),
+            on_ready: Some(Box::new(on_ready)),
+            on_moved: None,
+            restore_video: None,
+        })))
+    }
+
+    /// Draws the video under `component`'s Slint items when this window is
+    /// active. Returns the window's id for [`Self::move_to`]; the first
+    /// window attached (id 0) starts out active. `capture`, if given, can
+    /// grab what this window drew.
+    pub fn attach<C: ComponentHandle + 'static>(
+        &self,
+        component: &C,
+        capture: Option<ScreenCapture>,
+    ) -> Result<usize, slint::SetRenderingNotifierError> {
+        let weak = component.as_weak();
+        let redraw: Rc<dyn Fn()> = Rc::new(move || {
+            if let Some(c) = weak.upgrade() {
+                c.window().request_redraw();
             }
-            RenderingState::BeforeRendering => {
-                let (Some((ctx, gl)), Some(c)) = (&state, weak.upgrade()) else {
-                    return;
-                };
-                let size = c.window().size();
-                // SAFETY: GL context is current (see RenderingSetup).
-                unsafe {
-                    let saved = GlState::save(gl);
-                    let fbo = saved.framebuffer;
-                    GlState::reset_for_mpv(gl);
-                    // Slint renders to the window (FBO 0) or, for snapshots, to a
-                    // texture FBO; the renderer handles orientation for both.
-                    if let Err(err) = ctx.render(fbo, size.width as i32, size.height as i32) {
-                        eprintln!("video: {err}");
-                    }
-                    saved.restore(gl);
+        });
+        let id = {
+            let mut out = self.0.borrow_mut();
+            out.redraw.push(redraw);
+            out.redraw.len() - 1
+        };
+
+        let output = self.clone();
+        let weak = component.as_weak();
+        let mut state: Option<WindowVideo> = None;
+        component
+            .window()
+            .set_rendering_notifier(move |rendering_state, graphics_api| match rendering_state {
+                RenderingState::RenderingSetup => {
+                    let GraphicsAPI::NativeOpenGL { get_proc_address } = graphics_api else {
+                        eprintln!("video: renderer is not OpenGL, video cannot be drawn");
+                        return;
+                    };
+                    // SAFETY: Slint calls the notifier on the UI thread with its
+                    // GL context current, and all later calls happen there too.
+                    let gl = unsafe {
+                        glow::Context::from_loader_function_cstr(|name| get_proc_address(name))
+                    };
+                    state = Some(WindowVideo { gl, renderer: None });
                 }
-            }
-            RenderingState::AfterRendering => {
-                let Some((ctx, gl)) = &state else { return };
-                ctx.report_swap();
-                if capture.wanted()
-                    && let Some(c) = weak.upgrade()
-                {
+                RenderingState::BeforeRendering => {
+                    let (Some(st), Some(c)) = (state.as_mut(), weak.upgrade()) else {
+                        return;
+                    };
+                    let GraphicsAPI::NativeOpenGL { get_proc_address } = graphics_api else {
+                        return;
+                    };
+                    output.sync(id, st, get_proc_address, &weak);
+                    let Some(renderer) = &st.renderer else { return };
                     let size = c.window().size();
                     // SAFETY: GL context is current (see RenderingSetup).
-                    let frame = unsafe { read_framebuffer(gl, size.width, size.height) };
-                    *capture.0.borrow_mut() = CaptureState::Done(frame);
+                    unsafe {
+                        let saved = GlState::save(&st.gl);
+                        let fbo = saved.framebuffer;
+                        GlState::reset_for_mpv(&st.gl);
+                        // Slint renders to the window (FBO 0) or, for snapshots, to
+                        // a texture FBO; the renderer handles orientation for both.
+                        if let Err(err) =
+                            renderer.render(fbo, size.width as i32, size.height as i32)
+                        {
+                            eprintln!("video: {err}");
+                        }
+                        saved.restore(&st.gl);
+                    }
+                }
+                RenderingState::AfterRendering => {
+                    let Some(st) = &state else { return };
+                    let Some(renderer) = &st.renderer else { return };
+                    renderer.report_swap();
+                    if let Some(capture) = &capture
+                        && capture.wanted()
+                        && let Some(c) = weak.upgrade()
+                    {
+                        let size = c.window().size();
+                        // SAFETY: GL context is current (see RenderingSetup).
+                        let frame = unsafe { read_framebuffer(&st.gl, size.width, size.height) };
+                        *capture.0.borrow_mut() = CaptureState::Done(frame);
+                    }
+                }
+                RenderingState::RenderingTeardown => {
+                    // Free the render context while the GL context is still current.
+                    if let Some(st) = state.as_mut() {
+                        output.release(id, st);
+                    }
+                    state = None;
+                }
+                _ => {}
+            })?;
+        Ok(id)
+    }
+
+    /// Moves the video to window `id`. `then` runs once that window draws it.
+    pub fn move_to(&self, id: usize, then: impl FnOnce() + 'static) {
+        let (old, new) = {
+            let mut out = self.0.borrow_mut();
+            if out.active == id {
+                drop(out);
+                then();
+                return;
+            }
+            // Freeing a render context while video plays makes mpv fail the
+            // video output, which ends a file without audio. Turn video off
+            // first and back on in the new window; playback carries on.
+            if out.holder.is_some() && out.restore_video.is_none() {
+                let video = out
+                    .player
+                    .tracks()
+                    .into_iter()
+                    .find(|t| t.kind == TrackKind::Video && t.selected);
+                if let Some(track) = video {
+                    out.restore_video = Some(track.id);
+                    let _ = out.player.select_track(TrackKind::Video, None);
                 }
             }
-            RenderingState::RenderingTeardown => {
-                // Free the render context while the GL context is still current.
-                state = None;
+            out.active = id;
+            out.on_moved = Some(Box::new(then));
+            let old = out.holder.and_then(|h| out.redraw.get(h).cloned());
+            (old, out.redraw.get(id).cloned())
+        };
+        // The old window frees its render context on its next frame, then
+        // asks the new one to draw.
+        for redraw in [old, new].into_iter().flatten() {
+            redraw();
+        }
+    }
+
+    /// Frees or creates this window's render context as needed.
+    fn sync<C: ComponentHandle + 'static>(
+        &self,
+        id: usize,
+        st: &mut WindowVideo,
+        get_proc_address: &dyn Fn(&std::ffi::CStr) -> *const std::ffi::c_void,
+        weak: &slint::Weak<C>,
+    ) {
+        let (active, holder) = {
+            let out = self.0.borrow();
+            (out.active, out.holder)
+        };
+        if st.renderer.is_some() && active != id {
+            self.release(id, st);
+            return;
+        }
+        if st.renderer.is_some() || active != id || holder.is_some() {
+            return;
+        }
+
+        let player = self.0.borrow().player.clone();
+        // SAFETY: called from BeforeRendering with this window's GL context
+        // current; the renderer is only used and dropped there as well.
+        match unsafe { player.create_renderer(get_proc_address) } {
+            Ok(mut renderer) => {
+                let weak = weak.clone();
+                renderer.set_update_callback(Box::new(move || {
+                    let weak = weak.clone();
+                    // Called on an mpv thread: hop to the UI thread to redraw.
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(c) = weak.upgrade() {
+                            c.window().request_redraw();
+                        }
+                    });
+                }));
+                st.renderer = Some(renderer);
+                let (ready, moved) = {
+                    let mut out = self.0.borrow_mut();
+                    out.holder = Some(id);
+                    if let Some(track) = out.restore_video.take() {
+                        let _ = out.player.select_track(TrackKind::Video, Some(track));
+                    }
+                    (out.on_ready.take(), out.on_moved.take())
+                };
+                if let Some(f) = ready {
+                    f();
+                }
+                if let Some(f) = moved {
+                    f();
+                }
             }
-            _ => {}
-        })
+            Err(err) => eprintln!("video: {err}"),
+        }
+    }
+
+    /// Frees this window's render context and lets the active window
+    /// create its own.
+    fn release(&self, id: usize, st: &mut WindowVideo) {
+        if st.renderer.take().is_none() {
+            return;
+        }
+        let redraw = {
+            let mut out = self.0.borrow_mut();
+            if out.holder == Some(id) {
+                out.holder = None;
+            }
+            out.redraw.get(out.active).cloned()
+        };
+        if let Some(redraw) = redraw {
+            redraw();
+        }
+    }
 }
 
 /// The bits of GL state mpv may change that Slint's renderer relies on.
