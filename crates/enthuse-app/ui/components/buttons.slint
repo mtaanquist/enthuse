@@ -1,0 +1,168 @@
+// Round icon buttons and pill buttons, in the variants from docs/ui.md.
+
+import { Theme } from "../theme.slint";
+import { ButtonBehavior } from "behavior.slint";
+
+export enum ButtonVariant {
+    // Accent fill: the main action on a screen.
+    primary,
+    // Border only: secondary actions on app screens.
+    outline,
+    // Translucent white fill: buttons on top of video.
+    overlay,
+    // Solid white fill: the play button on top of video.
+    light,
+}
+
+// Background for a variant in a given state. Translucent and white fills
+// change their alpha or shade; transparent ones step up to `surface`.
+global ButtonFill {
+    public pure function base(variant: ButtonVariant) -> color {
+        if (variant == ButtonVariant.primary) {
+            return Theme.accent;
+        }
+        if (variant == ButtonVariant.overlay) {
+            return Theme.overlay-button;
+        }
+        if (variant == ButtonVariant.light) {
+            return Theme.on-video;
+        }
+        transparent
+    }
+
+    public pure function fill(variant: ButtonVariant, hover: bool, down: bool) -> color {
+        if (variant == ButtonVariant.outline) {
+            return down ? Theme.pressed(Theme.surface) : hover ? Theme.surface : transparent;
+        }
+        if (variant == ButtonVariant.overlay) {
+            return down ? Theme.overlay-button-pressed : hover ? Theme.overlay-button-hover : Theme.overlay-button;
+        }
+        if (variant == ButtonVariant.light) {
+            // White can't get brighter: hover dims it slightly instead.
+            return down ? Theme.on-video.darker(0.2) : hover ? Theme.on-video.darker(0.08) : Theme.on-video;
+        }
+        down ? Theme.pressed(self.base(variant)) : hover ? Theme.hovered(self.base(variant)) : self.base(variant)
+    }
+
+    public pure function content(variant: ButtonVariant) -> color {
+        if (variant == ButtonVariant.primary) {
+            return Theme.on-accent;
+        }
+        if (variant == ButtonVariant.light) {
+            return Theme.on-accent;
+        }
+        Theme.text
+    }
+}
+
+export component IconButton inherits Rectangle {
+    in property <image> icon;
+    // Accessible name; buttons have no visible text.
+    in property <string> label;
+    in property <ButtonVariant> variant: ButtonVariant.outline;
+    in property <bool> enabled: true;
+    in property <length> size: root.variant == ButtonVariant.overlay ? Theme.overlay-button-size : Theme.touch-target;
+    in property <length> icon-size: root.size >= Theme.transport-button-size ? Theme.icon-size-large + 4px : root.size > Theme.touch-target ? Theme.icon-size-large : Theme.icon-size;
+    out property <bool> has-hover: behavior.has-hover;
+    callback clicked();
+
+    width: root.size;
+    height: root.size;
+    border-radius: self.height / 2;
+    border-width: root.variant == ButtonVariant.outline ? 1px : 0px;
+    border-color: Theme.line-strong;
+    background: ButtonFill.fill(root.variant, root.enabled && behavior.has-hover, root.enabled && behavior.pressed);
+    opacity: root.enabled ? 1 : Theme.disabled-opacity;
+    forward-focus: behavior;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        if (root.enabled) {
+            root.clicked();
+        }
+    }
+
+    animate background {
+        duration: behavior.pressed ? 0ms : Theme.hover-duration;
+    }
+
+    Image {
+        width: root.icon-size;
+        height: root.icon-size;
+        source: root.icon;
+        colorize: ButtonFill.content(root.variant);
+    }
+
+    behavior := ButtonBehavior {
+        enabled: root.enabled;
+        ring-radius: root.border-radius;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+export component PillButton inherits Rectangle {
+    in property <string> text;
+    // Optional leading icon.
+    in property <image> icon;
+    in property <ButtonVariant> variant: ButtonVariant.outline;
+    in property <bool> enabled: true;
+    in property <length> size: Theme.touch-target;
+    callback clicked();
+
+    // Sized to its content, also when placed outside a layout.
+    width: content.preferred-width;
+    height: root.size;
+    border-radius: self.height / 2;
+    border-width: root.variant == ButtonVariant.outline ? 1px : 0px;
+    border-color: Theme.line-strong;
+    background: ButtonFill.fill(root.variant, root.enabled && behavior.has-hover, root.enabled && behavior.pressed);
+    opacity: root.enabled ? 1 : Theme.disabled-opacity;
+    forward-focus: behavior;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        if (root.enabled) {
+            root.clicked();
+        }
+    }
+
+    animate background {
+        duration: behavior.pressed ? 0ms : Theme.hover-duration;
+    }
+
+    property <bool> has-icon: root.icon.width > 0;
+
+    content := HorizontalLayout {
+        padding-left: root.has-icon ? Theme.space-16 : Theme.space-20;
+        padding-right: Theme.space-20;
+        spacing: Theme.space-8;
+        alignment: center;
+
+        if root.has-icon: Image {
+            width: Theme.icon-size;
+            source: root.icon;
+            colorize: ButtonFill.content(root.variant);
+            image-fit: contain;
+        }
+
+        Text {
+            text: root.text;
+            color: ButtonFill.content(root.variant);
+            font-size: root.variant == ButtonVariant.primary && root.size > Theme.touch-target ? Theme.body-size : Theme.label-size;
+            font-weight: root.variant == ButtonVariant.primary ? Theme.body-strong-weight : Theme.label-weight;
+            vertical-alignment: center;
+        }
+    }
+
+    behavior := ButtonBehavior {
+        enabled: root.enabled;
+        ring-radius: root.border-radius;
+        clicked => {
+            root.clicked();
+        }
+    }
+}

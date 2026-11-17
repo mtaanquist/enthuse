@@ -1,0 +1,144 @@
+// Design tokens for the Enthuse UI. Components read every color, size and
+// type style from here and never use raw values. See docs/ui.md for intent.
+
+import "fonts/Inter-Regular.ttf";
+import "fonts/Inter-Medium.ttf";
+import "fonts/Inter-SemiBold.ttf";
+import "fonts/Inter-Bold.ttf";
+
+export global Theme {
+    // Colors.
+    out property <color> bg: #0f1115;
+    out property <color> sidebar: #13161b;
+    out property <color> surface: #171a20;
+    out property <color> surface-raised: #1f232b;
+    out property <color> line: #22262e;
+    out property <color> line-strong: #2a2f38;
+    out property <color> text: #eceef2;
+    out property <color> text-secondary: #c9ced8;
+    out property <color> text-muted: #9aa3b2;
+    out property <color> text-faint: #8a93a3;
+    // One token so it can become a user setting later.
+    out property <color> accent: #8ea2ff;
+    out property <color> on-accent: #0f1115;
+    out property <color> overlay-button: rgba(255, 255, 255, 0.12);
+    out property <color> overlay-button-hover: rgba(255, 255, 255, 0.2);
+    out property <color> overlay-button-pressed: rgba(255, 255, 255, 0.08);
+    // Hovered or selected rows in menus over video.
+    out property <color> overlay-row: rgba(255, 255, 255, 0.06);
+    out property <color> overlay-card: rgba(18, 20, 25, 0.92);
+    out property <color> danger: #f28b82;
+    out property <brush> scrim-top: @linear-gradient(180deg, rgba(0, 0, 0, 0.65) 0%, rgba(0, 0, 0, 0) 100%);
+    out property <brush> scrim-bottom: @linear-gradient(180deg, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0.78) 100%);
+    // Scrubber track, buffered range and the white thumb over video.
+    out property <color> track: rgba(255, 255, 255, 0.22);
+    out property <color> track-buffered: rgba(255, 255, 255, 0.4);
+    out property <color> on-video: #ffffff;
+
+    // Type. Inter is bundled; the weights below are the ones imported above.
+    out property <string> font-family: "Inter";
+    out property <length> title-size: 28px;
+    out property <int> title-weight: 700;
+    out property <length> title-letter-spacing: -0.56px; // -0.02em at 28px
+    out property <length> brand-size: 18px;
+    out property <int> brand-weight: 700;
+    out property <length> section-size: 17px;
+    out property <int> section-weight: 600;
+    out property <length> body-size: 15px;
+    out property <int> body-strong-weight: 600;
+    out property <int> body-weight: 500;
+    out property <length> label-size: 14px;
+    out property <int> label-weight: 500;
+    out property <length> meta-size: 13px;
+    out property <int> meta-weight: 400;
+    out property <length> chip-size: 12px;
+    out property <int> chip-weight: 500;
+
+    // Spacing scale.
+    out property <length> space-4: 4px;
+    out property <length> space-8: 8px;
+    out property <length> space-12: 12px;
+    out property <length> space-16: 16px;
+    out property <length> space-20: 20px;
+    out property <length> space-24: 24px;
+    out property <length> space-28: 28px;
+    out property <length> space-36: 36px;
+    out property <length> space-48: 48px;
+    out property <length> content-padding-x: 48px;
+    out property <length> content-padding-top: 32px;
+
+    // Sizes.
+    out property <length> touch-target: 44px;
+    out property <length> overlay-button-size: 48px;
+    out property <length> transport-button-size: 56px;
+    out property <length> pip-play-size: 60px;
+    out property <length> nav-item-height: 48px;
+    out property <length> sidebar-width: 232px;
+    out property <length> rail-width: 72px;
+    out property <length> icon-size: 20px;
+    out property <length> icon-size-large: 22px;
+
+    // Radii. Buttons and chips are fully round (half their height).
+    out property <length> radius-small: 6px;
+    out property <length> radius-medium: 10px;
+    out property <length> radius-large: 12px;
+    out property <length> radius-overlay: 14px;
+
+    // Interaction.
+    out property <duration> hover-duration: 120ms;
+    out property <float> disabled-opacity: 0.4;
+    out property <length> focus-ring-width: 2px;
+    out property <length> focus-ring-offset: 2px;
+
+    // Hover brightens and pressed darkens a filled background by 10%.
+    public pure function hovered(c: color) -> color {
+        c.brighter(0.1)
+    }
+    public pure function pressed(c: color) -> color {
+        c.darker(0.1)
+    }
+}
+
+// Lets a button hand keyboard focus back to the window's own key handler
+// (shortcuts such as Space and Escape). Each window implements `restore`.
+// Without it, keys go nowhere once the focused button is clicked away,
+// hidden or destroyed.
+export global KeyFocus {
+    callback restore();
+}
+
+// Our own icon set: 24px grid, 1.75px stroke, drawn white and tinted with
+// `colorize`. Sources in ui/icons/.
+export global Icons {
+    out property <image> play: @image-url("icons/play.svg");
+    out property <image> pause: @image-url("icons/pause.svg");
+    out property <image> back-10: @image-url("icons/back-10.svg");
+    out property <image> forward-30: @image-url("icons/forward-30.svg");
+    out property <image> next: @image-url("icons/next.svg");
+    out property <image> volume: @image-url("icons/volume.svg");
+    out property <image> volume-mute: @image-url("icons/volume-mute.svg");
+    out property <image> subtitles: @image-url("icons/subtitles.svg");
+    out property <image> audio: @image-url("icons/audio.svg");
+    out property <image> speed: @image-url("icons/speed.svg");
+    out property <image> fullscreen: @image-url("icons/fullscreen.svg");
+    out property <image> fullscreen-exit: @image-url("icons/fullscreen-exit.svg");
+    out property <image> pip: @image-url("icons/pip.svg");
+    out property <image> pip-exit: @image-url("icons/pip-exit.svg");
+    out property <image> folder: @image-url("icons/folder.svg");
+    out property <image> home: @image-url("icons/home.svg");
+    out property <image> recent: @image-url("icons/recent.svg");
+    out property <image> settings: @image-url("icons/settings.svg");
+    out property <image> search: @image-url("icons/search.svg");
+    out property <image> add: @image-url("icons/add.svg");
+    out property <image> back: @image-url("icons/back.svg");
+    out property <image> chevron-right: @image-url("icons/chevron-right.svg");
+    out property <image> close: @image-url("icons/close.svg");
+    out property <image> check: @image-url("icons/check.svg");
+    out property <image> list: @image-url("icons/list.svg");
+    out property <image> grid: @image-url("icons/grid.svg");
+    out property <image> drive: @image-url("icons/drive.svg");
+    out property <image> server: @image-url("icons/server.svg");
+    out property <image> library: @image-url("icons/library.svg");
+    out property <image> video: @image-url("icons/video.svg");
+    out property <image> more: @image-url("icons/more.svg");
+}

@@ -61,6 +61,12 @@ fn run(
     slint::BackendSelector::new()
         .backend_name("winit".into())
         .renderer_name("femtovg".into())
+        // Dark native title bar to match the UI (docs/ui.md, "Window
+        // chrome"). Windows honors it; on Linux it is a hint to the
+        // window manager or the client-side decorations.
+        .with_winit_window_attributes_hook(|attributes| {
+            attributes.with_theme(Some(slint::winit_030::winit::window::Theme::Dark))
+        })
         .select()?;
 
     let options: &[(&str, &str)] = if self_test {
@@ -85,6 +91,14 @@ fn run(
 
     let store = Rc::new(open_store(self_test));
     let window = AppWindow::new()?;
+    {
+        let weak = window.as_weak();
+        window.global::<KeyFocus>().on_restore(move || {
+            if let Some(w) = weak.upgrade() {
+                w.invoke_focus_keys();
+            }
+        });
+    }
     let playback = playback::Playback::new(&window, player.clone());
     let browser = browser::Browser::new(&window, store.clone());
     for folder in folders {

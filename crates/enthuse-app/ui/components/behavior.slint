@@ -1,0 +1,69 @@
+// Shared pointer and keyboard behavior for anything tappable: hover and
+// pressed state, Enter or Space to activate, and a focus ring that only
+// shows when focus came from the keyboard. Place it as the last child, filling
+// its parent, and forward the parent's focus to it.
+
+import { Theme, KeyFocus } from "../theme.slint";
+
+export component ButtonBehavior {
+    in property <bool> enabled: true;
+    // Corner radius of the parent, so the ring follows its shape.
+    in property <length> ring-radius;
+    out property <bool> has-hover: touch.has-hover;
+    out property <bool> pressed: touch.pressed;
+    out property <bool> keyboard-focus;
+    callback clicked();
+
+    width: 100%;
+    height: 100%;
+    forward-focus: focus;
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            // A pointer click ends keyboard navigation: shortcuts apply again.
+            if (focus.has-focus) {
+                KeyFocus.restore();
+            }
+            root.clicked();
+        }
+    }
+
+    focus := FocusScope {
+        x: 0;
+        y: 0;
+        width: 0;
+        height: 0;
+        enabled: root.enabled;
+        focus-on-click: false;
+        focus-gained(reason) => {
+            root.keyboard-focus = reason == FocusReason.tab-navigation;
+        }
+        focus-lost(reason) => {
+            root.keyboard-focus = false;
+        }
+        key-pressed(event) => {
+            if (event.text == Key.Return || event.text == " ") {
+                // The action may hide or destroy this button, which would
+                // leave no item to receive keys. Hand focus back first.
+                KeyFocus.restore();
+                root.clicked();
+                return accept;
+            }
+            reject
+        }
+    }
+
+    property <length> ring-outset: Theme.focus-ring-width + Theme.focus-ring-offset;
+
+    if root.keyboard-focus && root.enabled: Rectangle {
+        x: -root.ring-outset;
+        y: -root.ring-outset;
+        width: root.width + 2 * root.ring-outset;
+        height: root.height + 2 * root.ring-outset;
+        border-radius: root.ring-radius + root.ring-outset;
+        border-width: Theme.focus-ring-width;
+        border-color: Theme.accent;
+    }
+}
