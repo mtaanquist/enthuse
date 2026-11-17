@@ -1,0 +1,57 @@
+// Recent screen (#70): recently played files, watched or not, most recent
+// first. Rust fills RecentModel for each window; tapping a row plays or
+// resumes it.
+
+import { ListView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { BrowserItem, FileRow } from "browser.slint";
+
+export global RecentModel {
+    in property <[BrowserItem]> items;
+    // False until loaded, so the empty message doesn't flash.
+    in property <bool> loaded;
+
+    callback play(int);
+    // Asks Rust to load the list again, e.g. when the screen shows.
+    callback refresh();
+}
+
+export component RecentPage inherits Rectangle {
+    property <length> pad: root.width < 700px ? Theme.space-24 : Theme.content-padding-x;
+
+    VerticalLayout {
+        padding-left: root.pad;
+        padding-right: root.pad;
+        padding-top: Theme.content-padding-top;
+        spacing: Theme.space-20;
+
+        Text {
+            text: "Recent";
+            color: Theme.text;
+            font-size: Theme.title-size;
+            font-weight: Theme.title-weight;
+            letter-spacing: Theme.title-letter-spacing;
+        }
+
+        if RecentModel.loaded && RecentModel.items.length == 0: Text {
+            text: "Nothing played yet. Files you play show here, watched or not.";
+            color: Theme.text-muted;
+            font-size: Theme.body-size;
+            wrap: word-wrap;
+        }
+
+        if RecentModel.items.length > 0: ListView {
+            vertical-stretch: 1;
+
+            for item[index] in RecentModel.items: FileRow {
+                item: item;
+                clicked => { RecentModel.play(index); }
+            }
+        }
+
+        // Keeps the title at the top when the list is empty.
+        if RecentModel.items.length == 0: Rectangle {
+            vertical-stretch: 1;
+        }
+    }
+}

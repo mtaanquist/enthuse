@@ -141,32 +141,3 @@ export component Shell inherits Rectangle {
         @children
     }
 }
-
-// Stand-in for screens that are built in later issues of M2.
-export component PlaceholderPage inherits Rectangle {
-    in property <string> title;
-    in property <string> text;
-
-    VerticalLayout {
-        padding-left: Theme.content-padding-x;
-        padding-right: Theme.content-padding-x;
-        padding-top: Theme.content-padding-top;
-        spacing: Theme.space-12;
-        alignment: start;
-
-        Text {
-            text: root.title;
-            color: Theme.text;
-            font-size: Theme.title-size;
-            font-weight: Theme.title-weight;
-            letter-spacing: Theme.title-letter-spacing;
-        }
-
-        Text {
-            text: root.text;
-            color: Theme.text-muted;
-            font-size: Theme.body-size;
-            wrap: word-wrap;
-        }
-    }
-}

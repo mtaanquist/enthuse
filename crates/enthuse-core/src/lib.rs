@@ -9,6 +9,7 @@ pub mod folder;
 pub mod natsort;
 pub mod next;
 pub mod paths;
+pub mod recent;
 pub mod resume;
 pub mod settings;
 pub mod source;

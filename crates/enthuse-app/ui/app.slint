@@ -4,16 +4,18 @@ import { Theme, Icons, KeyFocus } from "theme.slint";
 
 export { KeyFocus }
 import { ButtonVariant, IconButton, PillButton } from "components/buttons.slint";
-import { Section, Shell, PlaceholderPage } from "components/sidebar.slint";
+import { Section, Shell } from "components/sidebar.slint";
 import { BrowserModel, BrowserPage, Toast } from "browser.slint";
 import { HomeModel, HomePage } from "home.slint";
 import { PlayerModel, PlayerPage } from "player.slint";
 import { SettingsModel, SettingsPage } from "settings.slint";
+import { RecentModel, RecentPage } from "recent.slint";
 
 export { BrowserModel, BrowserItem, ItemKind, ItemBadge } from "browser.slint";
 export { HomeModel, ContinueItem, SourceTileItem, SourceIcon } from "home.slint";
 export { PlayerModel, PlayerLayout, TrackItem } from "player.slint";
 export { SettingsModel, OverrideItem } from "settings.slint";
+export { RecentModel } from "recent.slint";
 
 export { Section }
 //
@@ -470,6 +472,9 @@ component AppScreens inherits Rectangle {
         if (root.section == Section.settings) {
             SettingsModel.refresh();
         }
+        if (root.section == Section.recent) {
+            RecentModel.refresh();
+        }
     }
     changed view-mode => { KeyFocus.restore(); }
     changed loading => { KeyFocus.restore(); }
@@ -488,10 +493,7 @@ component AppScreens inherits Rectangle {
 
         if root.section == Section.browse: BrowserPage { }
 
-        if root.section == Section.recent: PlaceholderPage {
-            title: "Recent";
-            text: "Recently played files will show here.";
-        }
+        if root.section == Section.recent: RecentPage { }
 
         if root.section == Section.settings: SettingsPage { }
     }

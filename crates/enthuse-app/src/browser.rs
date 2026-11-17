@@ -120,7 +120,7 @@ pub struct Browser {
     on_play: RefCell<Option<PlayHandler>>,
     /// Runs after a source is added or removed, or the browser refreshes
     /// (e.g. after playback), so Home can update.
-    on_change: RefCell<Option<Box<dyn Fn()>>>,
+    on_change: RefCell<Vec<Box<dyn Fn()>>>,
     thumbs: RefCell<Option<Rc<Thumbs>>>,
 }
 
@@ -213,13 +213,13 @@ impl Browser {
         *self.on_play.borrow_mut() = Some(handler);
     }
 
-    pub fn set_change_handler(&self, handler: Box<dyn Fn()>) {
-        *self.on_change.borrow_mut() = Some(handler);
+    pub fn add_change_handler(&self, handler: Box<dyn Fn()>) {
+        self.on_change.borrow_mut().push(handler);
     }
 
     /// Tells Home (or whoever listens) that sources or watch states changed.
     pub fn changed(&self) {
-        if let Some(f) = self.on_change.borrow().as_ref() {
+        for f in self.on_change.borrow().iter() {
             f();
         }
     }
