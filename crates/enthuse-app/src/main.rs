@@ -137,11 +137,15 @@ fn run(
     playback.attach_side(pip.side());
     home.attach_side(pip.side());
     {
-        let pip = pip.clone();
-        nav.set_on_leave_player(Box::new(move || pip.exit()));
+        let (pip, playback) = (pip.clone(), playback.clone());
+        nav.set_on_leave_player(Box::new(move || {
+            pip.exit();
+            playback.leave_fullscreen();
+        }));
     }
 
     let outcome = if self_test {
+        playback.disable_auto_hide();
         selftest::start(&window, player.clone(), capture)
     } else {
         Default::default()

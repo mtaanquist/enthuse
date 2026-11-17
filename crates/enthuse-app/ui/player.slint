@@ -1,0 +1,616 @@
+// Playback screen (docs/ui.md, "Playback"): the overlay over the video.
+// The video itself is drawn by mpv under the window, and so are subtitles.
+// Rust fills PlayerModel; the timing of auto-hide lives in Rust too.
+
+import { Spinner } from "std-widgets.slint";
+import { Theme, Icons } from "theme.slint";
+import { ButtonVariant, IconButton, PillButton } from "components/buttons.slint";
+import { ButtonBehavior } from "components/behavior.slint";
+
+export struct TrackItem {
+    id: int,
+    label: string,
+    selected: bool,
+}
+
+// Fixed geometry the self-test relies on (see src/selftest.rs).
+export global PlayerLayout {
+    // Space between the window edge and the controls.
+    out property <length> pad: Theme.space-24;
+    out property <length> play-size: Theme.transport-button-size;
+}
+
+export global PlayerModel {
+    // Second line under the title, e.g. "S02E05".
+    in property <string> subtitle;
+    // "-31:56"
+    in property <string> remaining-text: "-0:00";
+    // Seconds read ahead, for the buffered part of the scrubber.
+    in property <float> buffered;
+    in property <bool> buffering;
+    // 0 to 100.
+    in property <float> volume: 100;
+    in property <bool> muted;
+    in property <float> speed: 1;
+    in property <string> speed-label: "1x";
+    in property <[float]> speeds;
+    // Selected subtitle and audio, e.g. "English, Danish audio".
+    in property <string> tracks-label: "Subtitles off";
+    in property <[TrackItem]> subtitle-tracks;
+    in property <[TrackItem]> audio-tracks;
+    // A next file in the folder exists.
+    in property <bool> has-next;
+    in property <bool> fullscreen;
+    // Rust hides the controls after a while without input.
+    in-out property <bool> controls-visible: true;
+    // Open menu: 0 none, 1 subtitles and audio, 2 speed. Rust keeps the
+    // controls up while a menu is open or the pointer is on them.
+    in-out property <int> menu;
+    in-out property <bool> pointer-on-controls;
+
+    // Mouse move, tap or key: show the controls and restart the hide timer.
+    callback activity();
+    // A tap on the video: show or hide the controls.
+    callback toggle-controls();
+    callback set-volume(float);
+    callback step-volume(float);
+    callback toggle-mute();
+    callback set-speed(float);
+    callback select-subtitle(int);
+    callback select-audio(int);
+    callback next();
+    callback toggle-fullscreen();
+    callback retry();
+}
+
+// Played, buffered and the thumb; tap or drag to seek.
+component Scrubber inherits Rectangle {
+    in property <float> position;
+    in property <float> duration;
+    in property <float> buffered;
+    callback seek(float);
+
+    height: 24px;
+    accessible-role: slider;
+    accessible-label: "Position";
+    accessible-value: root.position;
+    accessible-value-minimum: 0;
+    accessible-value-maximum: root.duration;
+
+    property <float> fraction: root.duration > 0 ? clamp(root.position / root.duration, 0, 1) : 0;
+    property <float> buffered-fraction: root.duration > 0 ? clamp(root.buffered / root.duration, 0, 1) : 0;
+
+    track := Rectangle {
+        y: (parent.height - self.height) / 2;
+        height: 4px;
+        border-radius: 2px;
+        background: Theme.track;
+
+        Rectangle {
+            x: 0;
+            width: parent.width * max(root.fraction, root.buffered-fraction);
+            border-radius: 2px;
+            background: Theme.track-buffered;
+        }
+
+        Rectangle {
+            x: 0;
+            width: parent.width * root.fraction;
+            border-radius: 2px;
+            background: Theme.accent;
+        }
+    }
+
+    Rectangle {
+        x: track.width * root.fraction - self.width / 2;
+        width: touch.pressed ? 20px : 16px;
+        height: self.width;
+        border-radius: self.width / 2;
+        background: Theme.on-video;
+    }
+
+    touch := TouchArea {
+        function seek-to(x: length) {
+            if (root.duration > 0) {
+                root.seek(clamp(x / self.width, 0, 1) * root.duration);
+            }
+        }
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                self.seek-to(self.mouse-x);
+            }
+        }
+        moved => {
+            if (self.pressed) {
+                self.seek-to(self.mouse-x);
+            }
+        }
+    }
+}
+
+// Mute button and a short volume slider.
+component VolumeControl inherits HorizontalLayout {
+    in property <bool> show-slider: true;
+    spacing: Theme.space-8;
+
+    IconButton {
+        variant: ButtonVariant.overlay;
+        icon: PlayerModel.muted || PlayerModel.volume <= 0 ? Icons.volume-mute : Icons.volume;
+        label: PlayerModel.muted ? "Unmute" : "Mute";
+        clicked => { PlayerModel.toggle-mute(); }
+    }
+
+    if root.show-slider: Rectangle {
+        width: 96px;
+        accessible-role: slider;
+        accessible-label: "Volume";
+        accessible-value: PlayerModel.volume;
+        accessible-value-minimum: 0;
+        accessible-value-maximum: 100;
+        accessible-action-increment => { PlayerModel.step-volume(5); }
+        accessible-action-decrement => { PlayerModel.step-volume(-5); }
+
+        property <float> level: PlayerModel.muted ? 0 : clamp(PlayerModel.volume / 100, 0, 1);
+
+        Rectangle {
+            y: (parent.height - self.height) / 2;
+            height: 4px;
+            border-radius: 2px;
+            background: Theme.track;
+
+            Rectangle {
+                x: 0;
+                width: parent.width * level;
+                border-radius: 2px;
+                background: Theme.on-video;
+            }
+        }
+
+        Rectangle {
+            x: parent.width * level - self.width / 2;
+            y: (parent.height - self.height) / 2;
+            width: 12px;
+            height: 12px;
+            border-radius: 6px;
+            background: Theme.on-video;
+        }
+
+        volume-touch := TouchArea {
+            function set-to(x: length) {
+                PlayerModel.set-volume(clamp(x / self.width, 0, 1) * 100);
+            }
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                    self.set-to(self.mouse-x);
+                }
+            }
+            moved => {
+                if (self.pressed) {
+                    self.set-to(self.mouse-x);
+                }
+            }
+        }
+    }
+}
+
+// One selectable line in a menu card.
+component MenuRow inherits Rectangle {
+    in property <string> text;
+    in property <bool> selected;
+    callback clicked();
+
+    height: Theme.touch-target;
+    border-radius: Theme.radius-small;
+    background: behavior.pressed ? Theme.overlay-button : (root.selected || behavior.has-hover) ? Theme.overlay-row : transparent;
+    forward-focus: behavior;
+    accessible-role: list-item;
+    accessible-label: root.text;
+    accessible-item-selected: root.selected;
+    accessible-action-default => { root.clicked(); }
+
+    HorizontalLayout {
+        padding-left: Theme.space-12;
+        padding-right: Theme.space-12;
+        spacing: Theme.space-8;
+
+        Image {
+            width: Theme.icon-size;
+            source: Icons.check;
+            colorize: Theme.accent;
+            opacity: root.selected ? 1 : 0;
+            image-fit: contain;
+        }
+
+        Text {
+            text: root.text;
+            color: Theme.text;
+            font-size: Theme.label-size;
+            font-weight: root.selected ? Theme.body-strong-weight : Theme.label-weight;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+    }
+
+    behavior := ButtonBehavior {
+        ring-radius: Theme.radius-small;
+        clicked => { root.clicked(); }
+    }
+}
+
+component MenuCard inherits Rectangle {
+    border-radius: Theme.radius-overlay;
+    background: Theme.overlay-card;
+    border-width: 1px;
+    border-color: Theme.line-strong;
+    drop-shadow-blur: 24px;
+    drop-shadow-color: rgba(0, 0, 0, 0.45);
+    clip: true;
+
+    // Swallow taps, so a tap inside does not reach the video below.
+    TouchArea { }
+
+    @children
+}
+
+component MenuHeading inherits Rectangle {
+    in property <string> text;
+    height: 32px;
+
+    Text {
+        x: Theme.space-12;
+        width: parent.width - 2 * Theme.space-12;
+        text: root.text;
+        color: Theme.text-muted;
+        font-size: Theme.meta-size;
+        font-weight: Theme.body-strong-weight;
+        vertical-alignment: center;
+    }
+}
+
+export component PlayerPage inherits Rectangle {
+    in property <bool> paused;
+    in property <float> position;
+    in property <float> duration;
+    in property <string> position-text;
+    in property <string> title;
+    in property <string> message;
+    callback toggle-pause();
+    callback seek(float);
+    callback seek-relative(float);
+    callback back();
+    callback toggle-pip();
+
+    // An error keeps the controls up.
+    property <bool> show: PlayerModel.controls-visible || root.message != "";
+    changed show => {
+        if (!root.show) {
+            PlayerModel.menu = 0;
+        }
+    }
+    property <bool> narrow: root.width < 720px;
+    init => { PlayerModel.menu = 0; }
+    property <length> pad: PlayerLayout.pad;
+
+    // The video area: mouse moves and taps show the controls.
+    TouchArea {
+        mouse-cursor: root.show ? MouseCursor.default : MouseCursor.none;
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.move) {
+                PlayerModel.activity();
+            }
+        }
+        clicked => {
+            if (PlayerModel.menu != 0) {
+                PlayerModel.menu = 0;
+                PlayerModel.activity();
+            } else {
+                PlayerModel.toggle-controls();
+            }
+        }
+        double-clicked => { PlayerModel.toggle-fullscreen(); }
+    }
+
+    if PlayerModel.buffering && root.message == "": Spinner {
+        width: 32px;
+        height: 32px;
+        indeterminate: true;
+    }
+
+    // Top: back, title and episode, PiP.
+    top := Rectangle {
+        x: 0;
+        y: 0;
+        height: 2 * root.pad + Theme.overlay-button-size + Theme.space-24;
+        background: Theme.scrim-top;
+        opacity: root.show ? 1 : 0;
+        visible: self.opacity > 0;
+
+        animate opacity {
+            duration: 200ms;
+        }
+
+        TouchArea {
+            changed has-hover => { PlayerModel.pointer-on-controls = self.has-hover; }
+        }
+
+        back := IconButton {
+            x: root.pad;
+            y: root.pad;
+            variant: ButtonVariant.overlay;
+            icon: Icons.back;
+            label: "Back";
+            clicked => { root.back(); }
+        }
+
+        VerticalLayout {
+            x: back.x + back.width + Theme.space-16;
+            y: root.pad;
+            width: pip.x - self.x - Theme.space-16;
+            height: back.height;
+            alignment: center;
+            spacing: 2px;
+
+            Text {
+                text: root.title;
+                color: Theme.text;
+                font-size: Theme.section-size + 3px;
+                font-weight: Theme.title-weight;
+                overflow: elide;
+            }
+
+            if PlayerModel.subtitle != "": Text {
+                text: PlayerModel.subtitle;
+                color: Theme.text-secondary;
+                font-size: Theme.label-size;
+                overflow: elide;
+            }
+        }
+
+        pip := IconButton {
+            x: parent.width - self.width - root.pad;
+            y: root.pad;
+            variant: ButtonVariant.overlay;
+            icon: Icons.pip;
+            label: "Picture in picture";
+            clicked => { root.toggle-pip(); }
+        }
+    }
+
+    // Bottom: scrubber, then the transport bar.
+    bottom := Rectangle {
+        x: 0;
+        height: root.pad + PlayerLayout.play-size + Theme.space-16 + 24px + Theme.space-48;
+        y: parent.height - self.height;
+        background: Theme.scrim-bottom;
+        opacity: root.show ? 1 : 0;
+        visible: self.opacity > 0;
+
+        animate opacity {
+            duration: 200ms;
+        }
+
+        TouchArea {
+            changed has-hover => { PlayerModel.pointer-on-controls = self.has-hover; }
+        }
+
+        HorizontalLayout {
+            x: root.pad;
+            y: transport.y - Theme.space-16 - self.height;
+            width: parent.width - 2 * root.pad;
+            height: 24px;
+            spacing: Theme.space-16;
+
+            Text {
+                text: root.position-text;
+                color: Theme.text;
+                font-size: Theme.meta-size;
+                vertical-alignment: center;
+                min-width: 44px;
+            }
+
+            Scrubber {
+                position: root.position;
+                duration: root.duration;
+                buffered: PlayerModel.buffered;
+                seek(t) => {
+                    root.seek(t);
+                    PlayerModel.activity();
+                }
+            }
+
+            Text {
+                text: PlayerModel.remaining-text;
+                color: Theme.text;
+                font-size: Theme.meta-size;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+                min-width: 52px;
+            }
+        }
+
+        transport := HorizontalLayout {
+            x: root.pad;
+            y: parent.height - root.pad - self.height;
+            width: parent.width - 2 * root.pad;
+            height: PlayerLayout.play-size;
+            spacing: root.narrow ? Theme.space-4 : Theme.space-12;
+
+            // White per the spec; the self-test probes its fill, see
+            // BUTTON_RGB in selftest.rs.
+            IconButton {
+                size: PlayerLayout.play-size;
+                variant: ButtonVariant.light;
+                icon: root.paused ? Icons.play : Icons.pause;
+                label: root.paused ? "Play" : "Pause";
+                clicked => { root.toggle-pause(); }
+            }
+
+            IconButton {
+                variant: ButtonVariant.overlay;
+                icon: Icons.back-10;
+                label: "Back 10 seconds";
+                clicked => { root.seek-relative(-10); }
+            }
+
+            IconButton {
+                variant: ButtonVariant.overlay;
+                icon: Icons.forward-30;
+                label: "Forward 30 seconds";
+                clicked => { root.seek-relative(30); }
+            }
+
+            IconButton {
+                variant: ButtonVariant.overlay;
+                icon: Icons.next;
+                label: "Next file";
+                enabled: PlayerModel.has-next;
+                clicked => { PlayerModel.next(); }
+            }
+
+            VolumeControl {
+                show-slider: !root.narrow;
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+
+            if !root.narrow: PillButton {
+                size: Theme.overlay-button-size;
+                variant: ButtonVariant.overlay;
+                icon: Icons.subtitles;
+                text: PlayerModel.tracks-label;
+                clicked => { PlayerModel.menu = PlayerModel.menu == 1 ? 0 : 1; }
+            }
+
+            if root.narrow: IconButton {
+                variant: ButtonVariant.overlay;
+                icon: Icons.subtitles;
+                label: "Subtitles and audio: " + PlayerModel.tracks-label;
+                clicked => { PlayerModel.menu = PlayerModel.menu == 1 ? 0 : 1; }
+            }
+
+            PillButton {
+                size: Theme.overlay-button-size;
+                variant: ButtonVariant.overlay;
+                text: PlayerModel.speed-label;
+                clicked => { PlayerModel.menu = PlayerModel.menu == 2 ? 0 : 2; }
+            }
+
+            IconButton {
+                variant: ButtonVariant.overlay;
+                icon: PlayerModel.fullscreen ? Icons.fullscreen-exit : Icons.fullscreen;
+                label: PlayerModel.fullscreen ? "Exit full screen" : "Full screen";
+                clicked => { PlayerModel.toggle-fullscreen(); }
+            }
+        }
+    }
+
+    // Subtitles and audio: one card, both lists.
+    if root.show && PlayerModel.menu == 1: tracks-card := MenuCard {
+        property <bool> two-columns: root.width >= 600px;
+        property <length> column-width: 240px;
+        width: self.two-columns ? 2 * self.column-width + 3 * Theme.space-8 : min(root.width - 2 * root.pad, self.column-width + 2 * Theme.space-8);
+        height: min(content.preferred-height, bottom.y + transport.y - Theme.space-16 - 24px - Theme.space-8 - top.height);
+        x: root.width - self.width - root.pad;
+        y: bottom.y + transport.y - Theme.space-16 - 24px - Theme.space-8 - self.height;
+
+        lists := Flickable {
+            content-height: content.preferred-height;
+
+            content := GridLayout {
+                width: parent.width;
+                padding: Theme.space-8;
+                spacing: Theme.space-8;
+
+                VerticalLayout {
+                    col: 0;
+                    row: 0;
+                    alignment: start;
+
+                    MenuHeading {
+                        text: "Subtitles";
+                    }
+
+                    for track in PlayerModel.subtitle-tracks: MenuRow {
+                        text: track.label;
+                        selected: track.selected;
+                        clicked => { PlayerModel.select-subtitle(track.id); }
+                    }
+                }
+
+                VerticalLayout {
+                    col: tracks-card.two-columns ? 1 : 0;
+                    row: tracks-card.two-columns ? 0 : 1;
+                    alignment: start;
+
+                    MenuHeading {
+                        text: "Audio";
+                    }
+
+                    for track in PlayerModel.audio-tracks: MenuRow {
+                        text: track.label;
+                        selected: track.selected;
+                        clicked => { PlayerModel.select-audio(track.id); }
+                    }
+                }
+            }
+        }
+    }
+
+    if root.show && PlayerModel.menu == 2: MenuCard {
+        width: 160px;
+        height: speed-list.preferred-height;
+        x: root.width - self.width - root.pad - Theme.overlay-button-size - Theme.space-12;
+        y: bottom.y + transport.y - Theme.space-16 - 24px - Theme.space-8 - self.height;
+
+        speed-list := VerticalLayout {
+            padding: Theme.space-8;
+
+            for speed in PlayerModel.speeds: MenuRow {
+                text: speed + "x";
+                selected: abs(speed - PlayerModel.speed) < 0.01;
+                clicked => {
+                    PlayerModel.set-speed(speed);
+                    PlayerModel.menu = 0;
+                }
+            }
+        }
+    }
+
+    // Playback error: the message with Retry and Back.
+    if root.message != "": MenuCard {
+        width: min(root.width - 2 * root.pad, 440px);
+        height: error.preferred-height;
+
+        error := VerticalLayout {
+            padding: Theme.space-24;
+            spacing: Theme.space-20;
+
+            Text {
+                text: root.message;
+                color: Theme.text;
+                font-size: Theme.body-size;
+                wrap: word-wrap;
+                horizontal-alignment: center;
+            }
+
+            HorizontalLayout {
+                alignment: center;
+                spacing: Theme.space-12;
+
+                PillButton {
+                    variant: ButtonVariant.primary;
+                    text: "Retry";
+                    clicked => { PlayerModel.retry(); }
+                }
+
+                PillButton {
+                    variant: ButtonVariant.overlay;
+                    text: "Back";
+                    clicked => { root.back(); }
+                }
+            }
+        }
+    }
+}

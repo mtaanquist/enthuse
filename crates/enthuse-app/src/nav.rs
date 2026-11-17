@@ -15,7 +15,7 @@ use slint::{ComponentHandle, Weak};
 
 use crate::browser::{Browser, SourceRef};
 use crate::playback::Playback;
-use crate::{AppWindow, bg};
+use crate::{AppWindow, PlayerModel, bg};
 
 pub const PAGE_BROWSER: i32 = 0;
 pub const PAGE_PLAYER: i32 = 1;
@@ -73,6 +73,12 @@ impl Nav {
             }
         }));
         let weak = Rc::downgrade(&this);
+        window.global::<PlayerModel>().on_next(move || {
+            if let Some(nav) = weak.upgrade() {
+                nav.skip_next();
+            }
+        });
+        let weak = Rc::downgrade(&this);
         window.on_back(move || {
             if let Some(nav) = weak.upgrade() {
                 nav.show_browser();
@@ -82,7 +88,7 @@ impl Nav {
     }
 
     /// Plays `path` from `source`, resuming where it was left off.
-    pub fn play(&self, source: SourceRef, path: SourcePath) {
+    pub fn play(self: &Rc<Self>, source: SourceRef, path: SourcePath) {
         let Some(w) = self.window.upgrade() else {
             return;
         };
@@ -106,6 +112,7 @@ impl Nav {
                     None
                 };
                 self.playback.open(&url, path.name().unwrap_or(&url), start);
+                self.find_next(&source, &path);
                 *self.current.borrow_mut() = Some(Current {
                     source,
                     path,
@@ -120,6 +127,39 @@ impl Nav {
                     .show_error(&format!("Cannot play this file: {err}"));
             }
         }
+    }
+
+    /// Looks up, off the UI thread, whether a file follows `path` in its
+    /// folder, and enables the next button if so.
+    fn find_next(self: &Rc<Self>, source: &SourceRef, path: &SourcePath) {
+        let this = Rc::downgrade(self);
+        let generation = self.generation.get();
+        let (src, path) = (source.source.clone(), path.clone());
+        bg::spawn(
+            move || next_video(&*src, &path),
+            move |next| {
+                if let Some(this) = this.upgrade()
+                    && this.generation.get() == generation
+                {
+                    this.playback.set_has_next(matches!(next, Ok(Some(_))));
+                }
+            },
+        );
+    }
+
+    /// The next button: saves the position and plays the next file.
+    fn skip_next(self: &Rc<Self>) {
+        self.save_position();
+        let Some(current) = self
+            .current
+            .borrow()
+            .as_ref()
+            .map(|c| (c.source.clone(), c.path.clone()))
+        else {
+            return;
+        };
+        self.generation.set(self.generation.get() + 1);
+        self.play_next(current.0, current.1);
     }
 
     /// Runs when playback stops and the browser shows, e.g. to close PiP.

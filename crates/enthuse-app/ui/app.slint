@@ -8,9 +8,11 @@ import { ButtonVariant, IconButton, PillButton } from "components/buttons.slint"
 import { Section, Shell, PlaceholderPage } from "components/sidebar.slint";
 import { BrowserModel, BrowserPage, Toast } from "browser.slint";
 import { HomeModel, HomePage } from "home.slint";
+import { PlayerModel, PlayerPage } from "player.slint";
 
 export { BrowserModel, BrowserItem, ItemKind, ItemBadge } from "browser.slint";
 export { HomeModel, ContinueItem, SourceTileItem, SourceIcon } from "home.slint";
+export { PlayerModel, PlayerLayout, TrackItem } from "player.slint";
 
 export { Section }
 //
@@ -18,14 +20,9 @@ export { Section }
 // mpv, shows through. Pages that are not the player draw their own
 // opaque background.
 
-export struct TrackItem {
-    id: int,
-    label: string,
-    selected: bool,
-}
 
 
-// Fixed geometry the self-test relies on (see src/selftest.rs).
+// Geometry of the now-playing bar in the browser window (#67 restyles it).
 export global Layout {
     out property <length> bar-height: 96px;
     out property <length> button-size: Theme.transport-button-size;
@@ -78,162 +75,6 @@ component SeekBar inherits Rectangle {
         moved => {
             if (self.pressed) {
                 self.seek-to(self.mouse-x);
-            }
-        }
-    }
-}
-
-component PlayerPage inherits Rectangle {
-    in property <bool> paused;
-    in property <float> position;
-    in property <float> duration;
-    in property <string> position-text;
-    in property <string> duration-text;
-    in property <string> title;
-    in property <string> message;
-    in property <[TrackItem]> subtitle-tracks;
-    callback toggle-pause();
-    callback seek(float);
-    callback select-subtitle(int);
-    callback back();
-    callback toggle-pip();
-
-    property <bool> show-subtitles;
-
-    // Top bar: back and title.
-    Rectangle {
-        x: 0;
-        y: 0;
-        height: Layout.button-size + 2 * Layout.gutter;
-        background: Theme.scrim-top;
-
-        IconButton {
-            x: Layout.gutter;
-            y: (parent.height - self.height) / 2;
-            variant: ButtonVariant.overlay;
-            icon: Icons.back;
-            label: "Back";
-            clicked => { root.back(); }
-        }
-
-        Text {
-            x: Layout.gutter * 2 + Theme.overlay-button-size;
-            width: parent.width - self.x - Layout.gutter;
-            text: root.title;
-            color: Theme.text;
-            font-size: Theme.section-size;
-            overflow: elide;
-            vertical-alignment: center;
-        }
-    }
-
-    if root.message != "": Rectangle {
-        width: min(parent.width - 2 * Layout.gutter, 520px);
-        height: 72px;
-        border-radius: 12px;
-        background: Theme.overlay-card;
-
-        Text {
-            width: parent.width - 2 * Layout.gutter;
-            text: root.message;
-            color: Theme.text;
-            font-size: Theme.body-size;
-            wrap: word-wrap;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-        }
-    }
-
-    // Bottom bar: play/pause, seek, time, subtitles.
-    Rectangle {
-        x: 0;
-        y: parent.height - Layout.bar-height;
-        height: Layout.bar-height;
-        background: Theme.overlay-card;
-
-        // Accent rather than the spec's white (#65 restyles this bar): the
-        // self-test probes this button's fill, see BUTTON_RGB in selftest.rs.
-        play := IconButton {
-            x: Layout.gutter;
-            y: (parent.height - self.height) / 2;
-            size: Layout.button-size;
-            variant: ButtonVariant.primary;
-            icon: root.paused ? Icons.play : Icons.pause;
-            label: root.paused ? "Play" : "Pause";
-            clicked => { root.toggle-pause(); }
-        }
-
-        subs := IconButton {
-            x: parent.width - self.width - Layout.gutter;
-            y: (parent.height - self.height) / 2;
-            variant: ButtonVariant.overlay;
-            icon: Icons.subtitles;
-            label: "Subtitles";
-            clicked => { root.show-subtitles = !root.show-subtitles; }
-        }
-
-        pip := IconButton {
-            x: subs.x - self.width - Layout.gutter;
-            y: (parent.height - self.height) / 2;
-            variant: ButtonVariant.overlay;
-            icon: Icons.pip;
-            label: "Picture in picture";
-            clicked => { root.toggle-pip(); }
-        }
-
-        time := Text {
-            x: pip.x - self.width - Layout.gutter;
-            width: 130px;
-            text: root.position-text + " / " + root.duration-text;
-            color: Theme.text-muted;
-            font-size: Theme.meta-size;
-            horizontal-alignment: right;
-            vertical-alignment: center;
-        }
-
-        SeekBar {
-            x: play.x + play.width + Layout.gutter;
-            width: time.x - self.x - Layout.gutter;
-            y: (parent.height - self.height) / 2;
-            position: root.position;
-            duration: root.duration;
-            seek(t) => { root.seek(t); }
-        }
-    }
-
-    // Subtitle picker, above the bottom bar on the right.
-    if root.show-subtitles: Rectangle {
-        width: 260px;
-        height: min(list.preferred-height, root.height - Layout.bar-height - 2 * Layout.gutter);
-        x: parent.width - self.width - Layout.gutter;
-        y: parent.height - Layout.bar-height - self.height - Layout.gutter;
-        border-radius: 12px;
-        background: Theme.overlay-card;
-        clip: true;
-
-        list := VerticalLayout {
-            padding: 8px;
-            for track in root.subtitle-tracks: Rectangle {
-                height: 48px;
-                border-radius: 8px;
-                background: item-touch.pressed ? Theme.overlay-button : (track.selected || item-touch.has-hover) ? Theme.overlay-row : transparent;
-
-                Text {
-                    x: 12px;
-                    width: parent.width - 24px;
-                    text: (track.selected ? "* " : "  ") + track.label;
-                    color: Theme.text;
-                    font-size: Theme.body-size;
-                    overflow: elide;
-                    vertical-alignment: center;
-                }
-
-                item-touch := TouchArea {
-                    clicked => {
-                        root.select-subtitle(track.id);
-                        root.show-subtitles = false;
-                    }
-                }
             }
         }
     }
@@ -551,11 +392,9 @@ export component AppWindow inherits Window {
     in property <string> duration-text: "0:00";
     in property <string> video-title;
     in property <string> message;
-    in property <[TrackItem]> subtitle-tracks;
     callback toggle-pause();
     callback seek(float);
     callback seek-relative(float);
-    callback select-subtitle(int);
     callback back();
     in property <bool> pip-active;
     callback toggle-pip();
@@ -581,16 +420,29 @@ export component AppWindow inherits Window {
                 }
                 return reject;
             }
-            if (e.text == " ") {
-                root.toggle-pause();
-                return accept;
-            }
             if (e.text == Key.Escape) {
-                if (root.pip-active) {
+                if (PlayerModel.menu != 0 && !root.pip-active) {
+                    PlayerModel.menu = 0;
+                } else if (root.pip-active) {
                     root.toggle-pip();
+                } else if (PlayerModel.fullscreen) {
+                    PlayerModel.toggle-fullscreen();
                 } else {
                     root.back();
                 }
+                return accept;
+            }
+            if (root.pip-active) {
+                if (e.text == " ") {
+                    root.toggle-pause();
+                    return accept;
+                }
+                return reject;
+            }
+            // Any other key shows the controls, as a mouse move does.
+            PlayerModel.activity();
+            if (e.text == " ") {
+                root.toggle-pause();
                 return accept;
             }
             if (e.text == Key.LeftArrow) {
@@ -599,6 +451,22 @@ export component AppWindow inherits Window {
             }
             if (e.text == Key.RightArrow) {
                 root.seek-relative(10);
+                return accept;
+            }
+            if (e.text == Key.UpArrow) {
+                PlayerModel.step-volume(5);
+                return accept;
+            }
+            if (e.text == Key.DownArrow) {
+                PlayerModel.step-volume(-5);
+                return accept;
+            }
+            if (e.text == "f" || e.text == "F") {
+                PlayerModel.toggle-fullscreen();
+                return accept;
+            }
+            if (e.text == "m" || e.text == "M") {
+                PlayerModel.toggle-mute();
                 return accept;
             }
             reject
@@ -614,13 +482,11 @@ export component AppWindow inherits Window {
             position: root.position;
             duration: root.duration;
             position-text: root.position-text;
-            duration-text: root.duration-text;
             title: root.video-title;
             message: root.message;
-            subtitle-tracks: root.subtitle-tracks;
             toggle-pause => { root.toggle-pause(); }
             seek(t) => { root.seek(t); }
-            select-subtitle(id) => { root.select-subtitle(id); }
+            seek-relative(d) => { root.seek-relative(d); }
             back => { root.back(); }
             toggle-pip => { root.toggle-pip(); }
         }

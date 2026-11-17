@@ -124,6 +124,8 @@ Video fills the window (drawn by libmpv under the Slint UI). Overlay, shown on m
 
 Subtitles are rendered by mpv inside the video frame. The UI never draws them, and the overlay must not cover the bottom subtitle area when it can be avoided.
 
+Keys: Space play or pause, Left and Right seek 10 s, Up and Down volume, F full screen, M mute, Escape closes a menu, then leaves full screen, then goes back. A tap on the video shows or hides the controls, and a double click toggles full screen. While the controls show, subtitles move up above them (mpv's `sub-pos`).
+
 ### Picture-in-picture
 
 A separate borderless, always-on-top, freely resizable window that reuses the same player (see `docs/design.md`). Default size 560x315, bottom right of the current screen with a 48px margin. Aspect ratio is locked while resizing. Hover (or tap) shows PipControls; the progress line at the bottom stays visible. Drag anywhere outside a button to move the window. On Wayland, where always-on-top can't be requested, it is a normal borderless window.
