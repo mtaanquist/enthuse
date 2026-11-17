@@ -150,6 +150,11 @@ impl GlRenderContext {
             internal_format: 0,
         };
         let mut flip: c_int = flip_y.into();
+        // By default mpv sleeps inside this call until the frame's display
+        // time. That stalls our UI thread for most of each video frame, so
+        // window moves and input lag while playing. Slint presents the frame
+        // right away instead, and report_swap keeps mpv's timing informed.
+        let mut block: c_int = 0;
         let mut params = [
             sys::mpv_render_param {
                 type_: sys::mpv_render_param_type_MPV_RENDER_PARAM_OPENGL_FBO,
@@ -158,6 +163,10 @@ impl GlRenderContext {
             sys::mpv_render_param {
                 type_: sys::mpv_render_param_type_MPV_RENDER_PARAM_FLIP_Y,
                 data: &mut flip as *mut _ as *mut c_void,
+            },
+            sys::mpv_render_param {
+                type_: sys::mpv_render_param_type_MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME,
+                data: &mut block as *mut _ as *mut c_void,
             },
             sys::mpv_render_param {
                 type_: sys::mpv_render_param_type_MPV_RENDER_PARAM_INVALID,
