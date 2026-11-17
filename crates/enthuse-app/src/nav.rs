@@ -78,6 +78,14 @@ impl Nav {
                 nav.skip_next();
             }
         });
+        // Replaces Playback's own Retry, so a file from a source resumes
+        // and its next button works again.
+        let weak = Rc::downgrade(&this);
+        window.global::<PlayerModel>().on_retry(move || {
+            if let Some(nav) = weak.upgrade() {
+                nav.retry();
+            }
+        });
         let weak = Rc::downgrade(&this);
         window.on_back(move || {
             if let Some(nav) = weak.upgrade() {
@@ -145,6 +153,19 @@ impl Nav {
                 }
             },
         );
+    }
+
+    /// Retry after a playback error.
+    fn retry(self: &Rc<Self>) {
+        let current = self
+            .current
+            .borrow()
+            .as_ref()
+            .map(|c| (c.source.clone(), c.path.clone()));
+        match current {
+            Some((source, path)) => self.play(source, path),
+            None => self.playback.retry(),
+        }
     }
 
     /// The next button: saves the position and plays the next file.

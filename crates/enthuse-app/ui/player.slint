@@ -70,7 +70,7 @@ component Scrubber inherits Rectangle {
     in property <float> buffered;
     callback seek(float);
 
-    height: 24px;
+    height: Theme.touch-target;
     accessible-role: slider;
     accessible-label: "Position";
     accessible-value: root.position;
@@ -288,7 +288,13 @@ export component PlayerPage inherits Rectangle {
         }
     }
     property <bool> narrow: root.width < 720px;
-    init => { PlayerModel.menu = 0; }
+    // Too narrow for every button: seek buttons and speed go (the keys
+    // and the scrubber still seek).
+    property <bool> very-narrow: root.width < 540px;
+    init => {
+        PlayerModel.menu = 0;
+        PlayerModel.pointer-on-controls = false;
+    }
     property <length> pad: PlayerLayout.pad;
 
     // The video area: mouse moves and taps show the controls.
@@ -329,9 +335,10 @@ export component PlayerPage inherits Rectangle {
             duration: 200ms;
         }
 
+        // Parent of the controls, so it stays hovered while the pointer
+        // is on a button: the controls do not hide under the pointer.
         TouchArea {
             changed has-hover => { PlayerModel.pointer-on-controls = self.has-hover; }
-        }
 
         back := IconButton {
             x: root.pad;
@@ -374,12 +381,13 @@ export component PlayerPage inherits Rectangle {
             label: "Picture in picture";
             clicked => { root.toggle-pip(); }
         }
+        }
     }
 
     // Bottom: scrubber, then the transport bar.
     bottom := Rectangle {
         x: 0;
-        height: root.pad + PlayerLayout.play-size + Theme.space-16 + 24px + Theme.space-48;
+        height: root.pad + PlayerLayout.play-size + Theme.space-8 + Theme.touch-target + Theme.space-36;
         y: parent.height - self.height;
         background: Theme.scrim-bottom;
         opacity: root.show ? 1 : 0;
@@ -389,15 +397,16 @@ export component PlayerPage inherits Rectangle {
             duration: 200ms;
         }
 
+        // Parent of the controls, so it stays hovered while the pointer
+        // is on a button: the controls do not hide under the pointer.
         TouchArea {
             changed has-hover => { PlayerModel.pointer-on-controls = self.has-hover; }
-        }
 
         HorizontalLayout {
             x: root.pad;
-            y: transport.y - Theme.space-16 - self.height;
+            y: transport.y - Theme.space-8 - self.height;
             width: parent.width - 2 * root.pad;
-            height: 24px;
+            height: Theme.touch-target;
             spacing: Theme.space-16;
 
             Text {
@@ -445,14 +454,14 @@ export component PlayerPage inherits Rectangle {
                 clicked => { root.toggle-pause(); }
             }
 
-            IconButton {
+            if !root.very-narrow: IconButton {
                 variant: ButtonVariant.overlay;
                 icon: Icons.back-10;
                 label: "Back 10 seconds";
                 clicked => { root.seek-relative(-10); }
             }
 
-            IconButton {
+            if !root.very-narrow: IconButton {
                 variant: ButtonVariant.overlay;
                 icon: Icons.forward-30;
                 label: "Forward 30 seconds";
@@ -490,7 +499,7 @@ export component PlayerPage inherits Rectangle {
                 clicked => { PlayerModel.menu = PlayerModel.menu == 1 ? 0 : 1; }
             }
 
-            PillButton {
+            if !root.very-narrow: PillButton {
                 size: Theme.overlay-button-size;
                 variant: ButtonVariant.overlay;
                 text: PlayerModel.speed-label;
@@ -504,6 +513,7 @@ export component PlayerPage inherits Rectangle {
                 clicked => { PlayerModel.toggle-fullscreen(); }
             }
         }
+        }
     }
 
     // Subtitles and audio: one card, both lists.
@@ -511,9 +521,9 @@ export component PlayerPage inherits Rectangle {
         property <bool> two-columns: root.width >= 600px;
         property <length> column-width: 240px;
         width: self.two-columns ? 2 * self.column-width + 3 * Theme.space-8 : min(root.width - 2 * root.pad, self.column-width + 2 * Theme.space-8);
-        height: min(content.preferred-height, bottom.y + transport.y - Theme.space-16 - 24px - Theme.space-8 - top.height);
+        height: min(content.preferred-height, bottom.y + transport.y - Theme.space-8 - Theme.touch-target - Theme.space-8 - top.height);
         x: root.width - self.width - root.pad;
-        y: bottom.y + transport.y - Theme.space-16 - 24px - Theme.space-8 - self.height;
+        y: bottom.y + transport.y - Theme.space-8 - Theme.touch-target - Theme.space-8 - self.height;
 
         lists := Flickable {
             content-height: content.preferred-height;
@@ -562,7 +572,7 @@ export component PlayerPage inherits Rectangle {
         width: 160px;
         height: speed-list.preferred-height;
         x: root.width - self.width - root.pad - Theme.overlay-button-size - Theme.space-12;
-        y: bottom.y + transport.y - Theme.space-16 - 24px - Theme.space-8 - self.height;
+        y: bottom.y + transport.y - Theme.space-8 - Theme.touch-target - Theme.space-8 - self.height;
 
         speed-list := VerticalLayout {
             padding: Theme.space-8;

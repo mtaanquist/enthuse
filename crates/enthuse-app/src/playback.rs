@@ -246,8 +246,9 @@ impl Playback {
         let _ = self.player.set_option("sub-pos", &format!("{pos:.0}"));
     }
 
-    /// Opens the last file again where it stopped, after an error.
-    fn retry(self: &Rc<Self>) {
+    /// Opens the last file again where it stopped, after an error. Files
+    /// from a source go through `Nav` instead, which resumes them.
+    pub fn retry(self: &Rc<Self>) {
         let Some((url, title)) = self.last.borrow().clone() else {
             return;
         };
@@ -294,6 +295,7 @@ impl Playback {
             model.set_buffered(0.0);
             model.set_remaining_text(remaining_label(0.0, 0.0).into());
             model.set_has_next(false);
+            model.set_pointer_on_controls(false);
         }
         self.show_controls();
         let title = display_title(title);
@@ -348,8 +350,12 @@ impl Playback {
                 self.refresh_tracks();
             }
             PlayerEvent::PositionChanged(pos) => {
+                // Keep the last known position for Retry: it reads as
+                // unknown once a file fails.
+                if let Some(p) = pos {
+                    self.position.set(*p);
+                }
                 let pos = pos.unwrap_or(0.0);
-                self.position.set(pos);
                 self.update_remaining();
                 let text: SharedString = format_time(pos).into();
                 each_view!(self, w => {
