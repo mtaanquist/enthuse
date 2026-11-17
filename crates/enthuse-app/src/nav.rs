@@ -2,7 +2,7 @@
 //! watched state up to date, and plays the next file in the folder when one
 //! ends (auto-next).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -35,6 +35,9 @@ pub struct Nav {
     browser: Rc<Browser>,
     store: Rc<Store>,
     current: RefCell<Option<Current>>,
+    /// Bumped whenever the user or auto-next starts or stops a file, so a
+    /// slow next-file lookup does not override what happened meanwhile.
+    generation: Cell<u64>,
 }
 
 impl Nav {
@@ -52,6 +55,7 @@ impl Nav {
             browser,
             store,
             current: RefCell::new(None),
+            generation: Cell::new(0),
         });
 
         let weak = Rc::downgrade(&this);
@@ -81,6 +85,7 @@ impl Nav {
             return;
         };
         self.save_position();
+        self.generation.set(self.generation.get() + 1);
         match source.source.playable(&path) {
             Ok(url) => {
                 let state = self.store.watch_state(source.id, &path).ok().flatten();
@@ -104,6 +109,7 @@ impl Nav {
     /// Saves the position, stops playback and returns to the browser.
     pub fn show_browser(&self) {
         self.save_position();
+        self.generation.set(self.generation.get() + 1);
         *self.current.borrow_mut() = None;
         let _ = self.player.stop();
         if let Some(w) = self.window.upgrade() {
@@ -175,6 +181,7 @@ impl Nav {
     /// UI thread, so files added or removed meanwhile are handled.
     fn play_next(self: &Rc<Self>, source: SourceRef, path: SourcePath) {
         let this = Rc::downgrade(self);
+        let generation = self.generation.get();
         let src = source.source.clone();
         bg::spawn(
             move || next_video(&*src, &path),
@@ -182,6 +189,9 @@ impl Nav {
                 let Some(this) = this.upgrade() else {
                     return;
                 };
+                if this.generation.get() != generation {
+                    return; // The user moved on while the folder was listed.
+                }
                 match next {
                     Ok(Some(next)) => this.play(source, next),
                     Ok(None) => this.show_browser(),
