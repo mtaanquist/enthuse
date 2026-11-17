@@ -85,20 +85,24 @@ jobs:
             $tag = gh release view --repo $repo --json tagName --jq .tagName
             Write-Host "MESA_DIST_WIN_TAG not set, using latest release: $tag"
           }
-          $asset = gh release view $tag --repo $repo --json assets --jq '.assets[].name' |
-            Where-Object { $_ -match '^mesa3d-.*-release-msvc\.7z$' } | Select-Object -First 1
-          if (-not $asset) { throw "No release-msvc asset in $repo@$tag" }
-          $archive = Join-Path $env:RUNNER_TEMP $asset
-          gh release download $tag --repo $repo --pattern $asset --output $archive --clobber
-          $mesa = Join-Path $env:RUNNER_TEMP "mesa"
-          7z x $archive "-o$mesa" -y | Out-Null
-          # Find the 64-bit opengl32.dll wherever the archive put it.
-          $dll = Get-ChildItem $mesa -Recurse -Filter opengl32.dll |
-            Where-Object { $_.DirectoryName -match 'x64' } | Select-Object -First 1
-          if (-not $dll) {
-            Get-ChildItem $mesa -Recurse -Depth 2 | ForEach-Object { $_.FullName }
-            throw "No x64 opengl32.dll in $asset"
+          $assets = gh release view $tag --repo $repo --json assets --jq '.assets[].name'
+          Write-Host "Assets in $repo@${tag}:"; $assets | ForEach-Object { Write-Host "  $_" }
+          # Desktop OpenGL (opengl32.dll) is not in every package; try the
+          # MSVC build first, then MinGW.
+          $dll = $null
+          foreach ($kind in 'msvc', 'mingw') {
+            $asset = $assets | Where-Object { $_ -match "^mesa3d-.*-release-$kind\.7z$" } | Select-Object -First 1
+            if (-not $asset) { continue }
+            $archive = Join-Path $env:RUNNER_TEMP $asset
+            gh release download $tag --repo $repo --pattern $asset --output $archive --clobber
+            $mesa = Join-Path $env:RUNNER_TEMP "mesa-$kind"
+            7z x $archive "-o$mesa" -y | Out-Null
+            $dll = Get-ChildItem $mesa -Recurse -Filter opengl32.dll |
+              Where-Object { $_.DirectoryName -match 'x64' } | Select-Object -First 1
+            if ($dll) { break }
+            Write-Host "No x64 opengl32.dll in $asset"
           }
+          if (-not $dll) { throw "No x64 opengl32.dll in any Mesa package of $repo@$tag" }
           Write-Host "Mesa DLLs: $($dll.DirectoryName)"
           "MESA_X64=$($dll.DirectoryName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
