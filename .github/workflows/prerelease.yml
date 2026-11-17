@@ -4,7 +4,8 @@ name: Pre-release
 # publishes them as a GitHub pre-release, so the app can be tried without a
 # Rust toolchain. Each staging branch has one rolling pre-release (tag
 # `prerelease-<branch>`) that is replaced on every push. Linux packages are
-# built on ubuntu-latest, so they need a glibc at least that new.
+# built on Ubuntu 24.04 rather than ubuntu-latest, so they also run on distributions
+# with an older glibc.
 
 on:
   push:
@@ -31,7 +32,7 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-24.04, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -60,6 +61,10 @@ jobs:
         run: .github/scripts/fetch-libmpv.ps1 -Dest "${{ runner.temp }}/libmpv" -Tag "${{ env.MPV_WINBUILD_TAG }}"
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          # The default key only names "Linux", so without this a cache built
+          # on another Ubuntu version (and glibc) would be restored here.
+          key: ${{ matrix.os }}
 
       - name: Build
         run: cargo build --release -p enthuse-app
