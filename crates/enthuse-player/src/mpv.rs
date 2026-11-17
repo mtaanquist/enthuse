@@ -259,8 +259,12 @@ impl Player for MpvPlayer {
 
     fn set_wakeup(&self, wakeup: WakeupFn) {
         if let Ok(mut slot) = self.wakeup.lock() {
-            *slot = Some(wakeup);
+            *slot = Some(wakeup.clone());
         }
+        // mpv calls the wakeup callback only once until the queue is read
+        // again. Events queued before this (e.g. the initial property values)
+        // would otherwise never be noticed, and no later wakeup would come.
+        wakeup();
     }
 
     unsafe fn create_renderer(

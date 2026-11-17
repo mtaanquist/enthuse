@@ -452,8 +452,6 @@ export component AppWindow inherits Window {
     callback back();
     // Rust-side plumbing: invoked on the UI thread when player events wait.
     callback player-events-pending();
-    // Rust-side plumbing: a folder listing finished on a worker thread.
-    callback listing-ready();
 
     changed page => { keys.focus(); }
 

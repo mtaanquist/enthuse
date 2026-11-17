@@ -176,6 +176,10 @@ pub trait Player: Send + Sync {
     /// Returns the next pending event without blocking, or `None`.
     fn poll_event(&self) -> Option<PlayerEvent>;
     /// Sets the callback that signals pending events. Replaces any earlier one.
+    ///
+    /// It may run on any thread, and runs once right away in case events are
+    /// already queued. After each wakeup, drain [`Player::poll_event`] until
+    /// it returns `None`; the next wakeup may not come before that.
     fn set_wakeup(&self, wakeup: WakeupFn);
 
     /// Creates a renderer that draws into the current OpenGL context.

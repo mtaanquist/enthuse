@@ -5,12 +5,11 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::mpsc::{Receiver, Sender, channel};
 
 use enthuse_core::source::{Entry, EntryKind, LocalFs, Source, SourceError, SourcePath};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel, Weak};
 
-use crate::{AppWindow, BrowserItem};
+use crate::{AppWindow, BrowserItem, bg};
 
 const KIND_SOURCE: i32 = 0;
 const KIND_FOLDER: i32 = 1;
@@ -32,8 +31,6 @@ enum Location {
     Folder { source: usize, path: SourcePath },
 }
 
-type Listing = (u64, Result<Vec<Entry>, SourceError>);
-
 pub struct Browser {
     window: Weak<AppWindow>,
     sources: RefCell<Vec<SourceSlot>>,
@@ -42,27 +39,20 @@ pub struct Browser {
     /// Bumped on every navigation so late results from an earlier listing
     /// are ignored.
     generation: RefCell<u64>,
-    results_tx: Sender<Listing>,
-    results_rx: Receiver<Listing>,
     on_play: RefCell<Option<PlayHandler>>,
 }
 
 impl Browser {
     pub fn new(window: &AppWindow) -> Rc<Self> {
-        let (results_tx, results_rx) = channel();
         let this = Rc::new(Self {
             window: window.as_weak(),
             sources: Default::default(),
             location: RefCell::new(Location::Sources),
             entries: Default::default(),
             generation: Default::default(),
-            results_tx,
-            results_rx,
             on_play: Default::default(),
         });
 
-        let b = this.clone();
-        window.on_listing_ready(move || b.drain_listings());
         let b = this.clone();
         window.on_browser_activate(move |i| b.activate(i as usize));
         let b = this.clone();
@@ -101,7 +91,7 @@ impl Browser {
         }
     }
 
-    fn activate(&self, index: usize) {
+    fn activate(self: &Rc<Self>, index: usize) {
         let location = self.location.borrow().clone();
         match location {
             Location::Sources => {
@@ -132,7 +122,7 @@ impl Browser {
         }
     }
 
-    fn up(&self) {
+    fn up(self: &Rc<Self>) {
         let location = self.location.borrow().clone();
         if let Location::Folder { source, path } = location {
             self.navigate(match path.parent() {
@@ -145,7 +135,7 @@ impl Browser {
         }
     }
 
-    fn navigate(&self, location: Location) {
+    fn navigate(self: &Rc<Self>, location: Location) {
         *self.location.borrow_mut() = location.clone();
         self.entries.borrow_mut().clear();
         let generation = {
@@ -171,14 +161,18 @@ impl Browser {
                 w.set_browser_items(ModelRc::default());
 
                 let src = slot.source.clone();
-                let tx = self.results_tx.clone();
-                let weak = self.window.clone();
-                std::thread::spawn(move || {
-                    let result = src.list(&path);
-                    if tx.send((generation, result)).is_ok() {
-                        let _ = weak.upgrade_in_event_loop(|w| w.invoke_listing_ready());
-                    }
-                });
+                let this = Rc::downgrade(self);
+                bg::spawn(
+                    move || src.list(&path),
+                    move |result| {
+                        // Ignore a listing the user already navigated away from.
+                        if let Some(this) = this.upgrade()
+                            && *this.generation.borrow() == generation
+                        {
+                            this.show_listing(result);
+                        }
+                    },
+                );
             }
         }
     }
@@ -200,15 +194,6 @@ impl Browser {
         w.set_browser_heading("Sources".into());
         w.set_browser_can_go_up(false);
         w.set_browser_items(ModelRc::new(VecModel::from(items)));
-    }
-
-    fn drain_listings(&self) {
-        let current = *self.generation.borrow();
-        while let Ok((generation, result)) = self.results_rx.try_recv() {
-            if generation == current {
-                self.show_listing(result);
-            }
-        }
     }
 
     fn show_listing(&self, result: Result<Vec<Entry>, SourceError>) {
