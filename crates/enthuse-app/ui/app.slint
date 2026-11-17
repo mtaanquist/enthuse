@@ -579,8 +579,21 @@ export component AppWindow inherits Window {
     }
 }
 
+// Invisible strip along a PiP window edge or corner that starts an OS resize
+// in `direction` (0 = north, then clockwise to 7 = north-west).
+component ResizeHandle inherits TouchArea {
+    in property <int> direction;
+    callback start(int);
+    pointer-event(e) => {
+        if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+            root.start(root.direction);
+        }
+    }
+}
+
 // Picture-in-picture: borderless, always on top, video only. Drag anywhere
-// to move, drag the corner to resize, double-click or "Exit" to return.
+// to move, drag an edge or corner to resize, double-click or "Exit" to
+// return.
 export component PipWindow inherits Window {
     title: "Enthuse";
     no-frame: true;
@@ -592,8 +605,12 @@ export component PipWindow inherits Window {
     min-height: 108px;
 
     callback start-move();
-    callback start-resize();
+    callback start-resize(int);
     callback exit-pip();
+
+    // Width of the resize strips along the edges, and size of the corners.
+    property <length> edge: 8px;
+    property <length> corner: 20px;
 
     property <bool> hover: move-area.has-hover || exit-touch.has-hover || grip-touch.has-hover;
 
@@ -604,6 +621,36 @@ export component PipWindow inherits Window {
             }
         }
         double-clicked => { root.exit-pip(); }
+    }
+
+    // Edges first, then corners on top of them.
+    ResizeHandle {
+        x: root.corner; y: 0; width: root.width - 2 * root.corner; height: root.edge;
+        direction: 0; mouse-cursor: ns-resize; start(d) => { root.start-resize(d); }
+    }
+    ResizeHandle {
+        x: root.width - root.edge; y: root.corner; width: root.edge; height: root.height - 2 * root.corner;
+        direction: 2; mouse-cursor: ew-resize; start(d) => { root.start-resize(d); }
+    }
+    ResizeHandle {
+        x: root.corner; y: root.height - root.edge; width: root.width - 2 * root.corner; height: root.edge;
+        direction: 4; mouse-cursor: ns-resize; start(d) => { root.start-resize(d); }
+    }
+    ResizeHandle {
+        x: 0; y: root.corner; width: root.edge; height: root.height - 2 * root.corner;
+        direction: 6; mouse-cursor: ew-resize; start(d) => { root.start-resize(d); }
+    }
+    ResizeHandle {
+        x: root.width - root.corner; y: 0; width: root.corner; height: root.corner;
+        direction: 1; mouse-cursor: nesw-resize; start(d) => { root.start-resize(d); }
+    }
+    ResizeHandle {
+        x: 0; y: root.height - root.corner; width: root.corner; height: root.corner;
+        direction: 5; mouse-cursor: nesw-resize; start(d) => { root.start-resize(d); }
+    }
+    ResizeHandle {
+        x: 0; y: 0; width: root.corner; height: root.corner;
+        direction: 7; mouse-cursor: nwse-resize; start(d) => { root.start-resize(d); }
     }
 
     // Controls stay visible but fade back when the pointer is away, so the
@@ -656,7 +703,7 @@ export component PipWindow inherits Window {
             mouse-cursor: nwse-resize;
             pointer-event(e) => {
                 if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
-                    root.start-resize();
+                    root.start-resize(3);
                 }
             }
         }
