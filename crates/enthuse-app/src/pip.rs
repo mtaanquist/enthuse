@@ -144,6 +144,8 @@ impl Pip {
         let side = self.side.window();
         side.set_size(saved.size);
         side.set_position(saved.position);
+        // The browser window shows the section the main window was on.
+        self.side.set_section(m.get_section());
         self.browser.set_view(View::Side(self.side.as_weak()));
         if let Err(err) = self.side.show() {
             eprintln!("enthuse: cannot open the browser window: {err}");
@@ -216,6 +218,7 @@ impl Pip {
             saved
         };
         let window = m.window();
+        m.set_section(self.side.get_section());
         m.set_pip_active(false);
         window.set_size(target.size);
         window.set_position(target.position);

@@ -40,6 +40,11 @@ impl Outcome {
 }
 
 pub fn start(window: &AppWindow, player: Arc<dyn Player>, capture: ScreenCapture) -> Outcome {
+    // 4:3 like the test video, so it fills the window and the probes below
+    // land on the bars. The app's own preferred size is wider.
+    window
+        .window()
+        .set_size(slint::LogicalSize::new(640.0, 480.0));
     let outcome = Outcome::default();
     let result = outcome.clone();
     let started = Instant::now();
@@ -92,13 +97,14 @@ pub fn start(window: &AppWindow, player: Arc<dyn Player>, capture: ScreenCapture
                 return; // Not rendered yet.
             };
 
-            let mut failures: Vec<String> = check(&screen)
+            let scale = window.window().scale_factor();
+            let mut failures: Vec<String> = check(&screen, scale)
                 .into_iter()
                 .map(|f| format!("window framebuffer: {f}"))
                 .collect();
             match window.window().take_snapshot() {
                 Ok(snapshot) => failures.extend(
-                    check(&snapshot)
+                    check(&snapshot, scale)
                         .into_iter()
                         .map(|f| format!("snapshot: {f}")),
                 ),
@@ -169,7 +175,8 @@ const BUTTON_FROM_BOTTOM: f32 = 96.0 / 2.0 - 20.0;
 /// `Theme.accent`.
 const BUTTON_RGB: [u8; 3] = [0x8e, 0xa2, 0xff];
 
-fn check(snapshot: &SharedPixelBuffer<Rgba8Pixel>) -> Vec<String> {
+/// `scale` is the window's scale factor: snapshots are in physical pixels.
+fn check(snapshot: &SharedPixelBuffer<Rgba8Pixel>, scale: f32) -> Vec<String> {
     let (w, h) = (snapshot.width(), snapshot.height());
     let pixels = snapshot.as_slice();
     let at = |x: u32, y: u32| {
@@ -193,9 +200,6 @@ fn check(snapshot: &SharedPixelBuffer<Rgba8Pixel>) -> Vec<String> {
         }
     }
 
-    // Snapshots are in physical pixels; derive the scale from the 640px-wide layout
-    // only if the window kept its preferred size, otherwise assume scale 1.
-    let scale = (w as f32 / 640.0).max(1.0);
     let bx = BUTTON_FROM_LEFT * scale;
     let by = h as f32 - BUTTON_FROM_BOTTOM * scale;
     let got = at(bx as u32, by as u32);
