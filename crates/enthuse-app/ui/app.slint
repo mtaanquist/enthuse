@@ -6,7 +6,7 @@ import { Theme, Icons, KeyFocus } from "theme.slint";
 export { KeyFocus }
 import { ButtonVariant, IconButton, PillButton } from "components/buttons.slint";
 import { Section, Shell, PlaceholderPage } from "components/sidebar.slint";
-import { BrowserModel, BrowserPage } from "browser.slint";
+import { BrowserModel, BrowserPage, Toast } from "browser.slint";
 import { HomeModel, HomePage } from "home.slint";
 
 export { BrowserModel, BrowserItem, ItemKind, ItemBadge } from "browser.slint";
@@ -506,6 +506,8 @@ component AppScreens inherits Rectangle {
             text: "Settings will show here.";
         }
     }
+
+    Toast { }
 
     // Escape (or Backspace) goes up a folder in Browse, and from the top of
     // a section back to Home. Returns whether the key was used.

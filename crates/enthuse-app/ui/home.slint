@@ -53,7 +53,7 @@ component ContinueCard inherits Rectangle {
 
     forward-focus: behavior;
     accessible-role: button;
-    accessible-label: "Resume " + root.item.title + ", " + root.item.subtitle;
+    accessible-label: root.item.title + ", " + root.item.subtitle;
     accessible-action-default => { root.clicked(); }
 
     VerticalLayout {
@@ -278,7 +278,10 @@ component SourceTile inherits Rectangle {
 
                     remove-behavior := ButtonBehavior {
                         ring-radius: Theme.radius-small;
-                        clicked => { root.remove(); }
+                        clicked => {
+                            menu.close();
+                            root.remove();
+                        }
                     }
                 }
             }

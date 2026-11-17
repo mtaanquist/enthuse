@@ -585,7 +585,11 @@ export component BrowserPage inherits Rectangle {
             }
         }
     }
+}
 
+// Short message at the bottom of the app screens, e.g. "Cannot play this
+// file". Shown in every section, so errors raised from Home are seen too.
+export component Toast inherits Rectangle {
     if BrowserModel.toast != "": Rectangle {
         x: (parent.width - self.width) / 2;
         y: parent.height - self.height - Theme.space-24;

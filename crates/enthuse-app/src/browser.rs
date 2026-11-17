@@ -177,7 +177,8 @@ impl Browser {
         *self.on_change.borrow_mut() = Some(handler);
     }
 
-    fn changed(&self) {
+    /// Tells Home (or whoever listens) that sources or watch states changed.
+    pub fn changed(&self) {
         if let Some(f) = self.on_change.borrow().as_ref() {
             f();
         }

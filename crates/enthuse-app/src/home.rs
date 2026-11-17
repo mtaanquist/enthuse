@@ -2,12 +2,14 @@
 //! Fills `HomeModel` in both windows, so Home looks the same in the
 //! browser window during PiP.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+use std::time::Duration;
 
 use enthuse_core::folder::{continue_subtitle, display_title, progress};
 use enthuse_core::source::SourcePath;
-use enthuse_core::storage::Store;
+use enthuse_core::storage::{SourceId, Store};
 use slint::{ComponentHandle, Model, ModelRc, VecModel, Weak};
 
 use crate::browser::{Browser, SourceRef};
@@ -27,8 +29,13 @@ pub struct Home {
     items: RefCell<Vec<(SourceRef, SourcePath)>>,
     /// Shown source tiles, for marking offline ones when the check returns.
     tiles: Rc<VecModel<SourceTileItem>>,
-    /// Bumped on every refresh so late reachability results are ignored.
-    generation: RefCell<u64>,
+    /// Last reachability result per source: true when offline.
+    offline: RefCell<HashMap<SourceId, bool>>,
+    /// Sources whose reachability check is still running. A dead share can
+    /// take a minute to fail; this keeps refreshes from piling up threads.
+    checking: RefCell<HashSet<SourceId>>,
+    /// The folder picker is open.
+    picking: Cell<bool>,
 }
 
 /// Connects a window's Home callbacks to `$home`.
@@ -40,7 +47,12 @@ macro_rules! wire_callbacks {
         let h = $home.clone();
         model.on_open_source(move |i| h.browser.open_source(i as usize));
         let h = $home.clone();
-        model.on_remove_source(move |i| h.browser.remove_source(i as usize));
+        // Later, so the tile (and its menu) that asked is not destroyed
+        // while its own click is still being handled.
+        model.on_remove_source(move |i| {
+            let h = h.clone();
+            slint::Timer::single_shot(Duration::ZERO, move || h.browser.remove_source(i as usize));
+        });
         let h = $home.clone();
         model.on_add_source(move || h.pick_folder());
         let h = $home.clone();
@@ -58,7 +70,9 @@ impl Home {
             nav: Default::default(),
             items: Default::default(),
             tiles: Rc::new(VecModel::default()),
-            generation: Default::default(),
+            offline: Default::default(),
+            checking: Default::default(),
+            picking: Cell::new(false),
         });
         wire_callbacks!(window, this);
         let weak = Rc::downgrade(&this);
@@ -94,12 +108,6 @@ impl Home {
 
     /// Loads "Continue watching" and the sources again.
     pub fn refresh(self: &Rc<Self>) {
-        let generation = {
-            let mut g = self.generation.borrow_mut();
-            *g += 1;
-            *g
-        };
-
         // Continue watching: only files of sources that are still there.
         let recent = self
             .store
@@ -128,10 +136,16 @@ impl Home {
         *self.items.borrow_mut() = items;
 
         let sources = self.browser.sources();
-        let tiles: Vec<_> = sources
-            .iter()
-            .map(|(s, location)| tile(&s.source.display_name(), location))
-            .collect();
+        let tiles: Vec<_> = {
+            let offline = self.offline.borrow();
+            sources
+                .iter()
+                .map(|(s, location)| {
+                    let offline = offline.get(&s.id).copied().unwrap_or(false);
+                    tile(&s.source.display_name(), location, offline)
+                })
+                .collect()
+        };
         self.tiles.set_vec(tiles);
 
         let cards = ModelRc::new(VecModel::from(cards));
@@ -142,27 +156,44 @@ impl Home {
             m.set_loaded(true);
         });
 
-        // Mark sources that cannot be listed (an unplugged drive, a share
-        // that is down) as offline. Listing can hang on a dead share, so it
-        // runs off the UI thread.
-        for (index, (source, _)) in sources.into_iter().enumerate() {
+        // Check again whether each source can be listed (an unplugged
+        // drive, a share that is down). Listing can hang on a dead share,
+        // so it runs off the UI thread, one check per source at a time.
+        for (source, _) in sources {
+            if !self.checking.borrow_mut().insert(source.id) {
+                continue;
+            }
             let this = Rc::downgrade(self);
+            let id = source.id;
             bg::spawn(
                 move || source.source.list(&SourcePath::root()).is_err(),
                 move |offline| {
-                    let Some(this) = this.upgrade() else {
-                        return;
-                    };
-                    if !offline || *this.generation.borrow() != generation {
-                        return;
-                    }
-                    if let Some(mut tile) = this.tiles.row_data(index) {
-                        tile.offline = true;
-                        tile.kind_label = "Offline".into();
-                        this.tiles.set_row_data(index, tile);
+                    if let Some(this) = this.upgrade() {
+                        this.checked(id, offline);
                     }
                 },
             );
+        }
+    }
+
+    /// Records a reachability result and updates the source's tile.
+    fn checked(&self, id: SourceId, offline: bool) {
+        self.checking.borrow_mut().remove(&id);
+        self.offline.borrow_mut().insert(id, offline);
+        // Find the tile by id: sources may have changed since the check began.
+        let sources = self.browser.sources();
+        let Some(index) = sources.iter().position(|(s, _)| s.id == id) else {
+            return;
+        };
+        if self
+            .tiles
+            .row_data(index)
+            .is_some_and(|t| t.offline != offline)
+        {
+            let (source, location) = &sources[index];
+            let name = source.source.display_name();
+            self.tiles
+                .set_row_data(index, tile(&name, location, offline));
         }
     }
 
@@ -177,33 +208,59 @@ impl Home {
 
     /// Asks for a folder with the system dialog and adds it as a source.
     fn pick_folder(self: &Rc<Self>) {
+        if self.picking.replace(true) {
+            return; // Already open.
+        }
+        let mut dialog = rfd::AsyncFileDialog::new().set_title("Add source");
+        // Owned by the window that asked, so it stays on top of it.
+        let side = self.side.borrow().as_ref().and_then(|w| w.upgrade());
+        let main = self.main.upgrade();
+        let parent = match (&side, &main) {
+            (Some(s), _) if s.window().is_visible() => Some(s.window().window_handle()),
+            (_, Some(m)) => Some(m.window().window_handle()),
+            _ => None,
+        };
+        if let Some(parent) = &parent {
+            dialog = dialog.set_parent(parent);
+        }
+        let picked = dialog.pick_folder();
         let this = Rc::downgrade(self);
-        // The dialog blocks until closed, so it runs off the UI thread.
-        bg::spawn(
-            || rfd::FileDialog::new().set_title("Add source").pick_folder(),
-            move |folder| {
-                if let (Some(this), Some(folder)) = (this.upgrade(), folder) {
-                    this.browser.add_local(&folder.to_string_lossy());
+        let spawned = slint::spawn_local(async move {
+            let folder = picked.await;
+            if let Some(this) = this.upgrade() {
+                this.picking.set(false);
+                if let Some(folder) = folder {
+                    this.browser.add_local(&folder.path().to_string_lossy());
                 }
-            },
-        );
+            }
+        });
+        if spawned.is_err() {
+            self.picking.set(false);
+        }
     }
 }
 
 /// The tile for a source with `name` at `location`. UNC paths
 /// (`\\server\share`, or `//server/share`) are network shares.
-fn tile(name: &str, location: &str) -> SourceTileItem {
+fn tile(name: &str, location: &str, offline: bool) -> SourceTileItem {
     let network = is_network_path(location);
     SourceTileItem {
         name: name.into(),
         detail: location.into(),
-        kind_label: if network { "SMB" } else { "Local" }.into(),
+        kind_label: if offline {
+            "Offline"
+        } else if network {
+            "SMB"
+        } else {
+            "Local"
+        }
+        .into(),
         icon: if network {
             SourceIcon::Server
         } else {
             SourceIcon::Drive
         },
-        offline: false,
+        offline,
     }
 }
 
