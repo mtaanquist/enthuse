@@ -13,6 +13,7 @@ repository = "https://github.com/mtaanquist/enthuse"
 enthuse-core = { path = "crates/enthuse-core" }
 enthuse-player = { path = "crates/enthuse-player" }
 directories = "6"
+libmpv2 = "7.0.1"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
