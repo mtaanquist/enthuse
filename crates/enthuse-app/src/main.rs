@@ -135,6 +135,10 @@ fn run(
     home.set_thumbs(&thumbs);
     nav.set_thumbs(&thumbs);
     recent.set_thumbs(&thumbs);
+    {
+        let thumbs = thumbs.clone();
+        settings.on_change(move || thumbs.settings_changed());
+    }
 
     let capture = video::ScreenCapture::default();
     // mpv needs the render context before a file is loaded, and the render

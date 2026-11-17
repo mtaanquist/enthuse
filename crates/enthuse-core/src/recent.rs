@@ -104,7 +104,10 @@ mod tests {
     #[test]
     fn badges() {
         assert_eq!(badge(&state(None, None, true)), Badge::Watched);
-        assert_eq!(badge(&state(Some(100.0), Some(400.0), true)), Badge::Watched);
+        assert_eq!(
+            badge(&state(Some(100.0), Some(400.0), true)),
+            Badge::Watched
+        );
         assert_eq!(
             badge(&state(Some(100.0), Some(400.0), false)),
             Badge::Resume {

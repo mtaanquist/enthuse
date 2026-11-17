@@ -167,6 +167,21 @@ impl Playback {
             }
         });
         let weak = Rc::downgrade(&this);
+        model.on_resized(move || {
+            if let Some(this) = weak.upgrade()
+                && let Some(w) = this.window.upgrade()
+            {
+                // Full screen can also end from outside (the window
+                // manager, a system shortcut); keep the button in step.
+                w.global::<PlayerModel>()
+                    .set_fullscreen(w.window().is_fullscreen());
+                // The room the controls take changes with the height.
+                if w.global::<PlayerModel>().get_controls_visible() {
+                    this.set_controls_visible(&w, true);
+                }
+            }
+        });
+        let weak = Rc::downgrade(&this);
         model.on_retry(move || {
             if let Some(this) = weak.upgrade() {
                 this.retry();

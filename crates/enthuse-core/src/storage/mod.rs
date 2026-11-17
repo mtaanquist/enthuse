@@ -761,9 +761,11 @@ mod tests {
     fn recently_played_includes_watched_newest_first() {
         let s = store();
         let src = s.add_source("local", "M", "/m").unwrap();
-        s.save_progress(src, &p("a.mkv"), 30.0, Some(100.0)).unwrap();
+        s.save_progress(src, &p("a.mkv"), 30.0, Some(100.0))
+            .unwrap();
         s.set_watched(src, &p("b.mkv"), true).unwrap();
-        s.save_progress(src, &p("c.mkv"), 10.0, Some(100.0)).unwrap();
+        s.save_progress(src, &p("c.mkv"), 10.0, Some(100.0))
+            .unwrap();
         // Marked unwatched again, with no position: not listed.
         s.set_watched(src, &p("c.mkv"), false).unwrap();
         let recent: Vec<_> = s

@@ -164,7 +164,8 @@ impl Nav {
             }
             Err(err) => {
                 self.show_browser();
-                self.browser.show_error(&cannot_play(&path, &err.to_string()));
+                self.browser
+                    .show_error(&cannot_play(&path, &err.to_string()));
             }
         }
     }

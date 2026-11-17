@@ -564,6 +564,8 @@ export component AppWindow inherits Window {
 
     changed page => { keys.focus(); }
     changed pip-active => { keys.focus(); }
+    changed width => { PlayerModel.resized(); }
+    changed height => { PlayerModel.resized(); }
     // Rust connects KeyFocus.restore to this.
     public function focus-keys() { keys.focus(); }
 

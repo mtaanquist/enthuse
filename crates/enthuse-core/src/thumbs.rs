@@ -190,6 +190,13 @@ impl<T> ThumbQueue<T> {
         next
     }
 
+    /// Drops waiting jobs, in both lanes, for which `keep` is false, e.g.
+    /// files on network shares when their thumbnails are turned off.
+    pub fn retain(&mut self, mut keep: impl FnMut(&T) -> bool) {
+        self.urgent.retain(|(_, job)| keep(job));
+        self.folder.retain(|(_, job)| keep(job));
+    }
+
     /// The running job is done.
     pub fn finish(&mut self) {
         self.running = None;
@@ -206,6 +213,18 @@ impl<T> ThumbQueue<T> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn retain_drops_from_both_lanes() {
+        let mut q = super::ThumbQueue::new();
+        q.push_urgent("a".into(), true);
+        q.push_urgent("b".into(), false);
+        q.set_folder(vec![("c".into(), false), ("d".into(), true)]);
+        q.retain(|network| !network);
+        assert_eq!(q.pop().map(|(id, _)| id).as_deref(), Some("b"));
+        assert_eq!(q.pop().map(|(id, _)| id).as_deref(), Some("c"));
+        assert!(q.pop().is_none());
+    }
+
     use super::*;
 
     struct TempDir(PathBuf);

@@ -1,6 +1,6 @@
 # UI spec
 
-This is the reference for building the Enthuse UI in Slint. The mockups in `docs/mockups/` show the target look; this file gives the exact values and covers the states the mockups don't show. Once `theme.slint` and the base components exist, the code is the reference and this file should only describe intent.
+This file describes the intent of the Enthuse UI: the look, the screens and the states the mockups don't show. The code is the reference for exact values: colors, type, spacing, sizes and radii live in `crates/enthuse-app/ui/theme.slint` (`Theme` and `Icons`), and the base components in `ui/components/`. When the two disagree, fix whichever is wrong and keep them in step.
 
 Design direction: dark, flat and minimal, with one accent color. Touch-friendly. Clearly our own look (see the branding rule in `CLAUDE.md`).
 
@@ -20,58 +20,12 @@ The mockups are drawn at 1280x800 logical pixels (exported at 2x). Titles, file 
 
 ## Tokens
 
-Put these in one `export global Theme` in `theme.slint`. Components never use raw values.
+All values are tokens in `Theme` (`ui/theme.slint`); components never use raw values. The intent behind them:
 
-### Colors
-
-| Token | Value | Use |
-| --- | --- | --- |
-| `bg` | `#0f1115` | Window background |
-| `sidebar` | `#13161b` | Side navigation background |
-| `surface` | `#171a20` | Tiles, cards, highlighted rows, code blocks |
-| `surface-raised` | `#1f232b` | Selected nav item, icon wells, chips |
-| `line` | `#22262e` | Borders on tiles, sidebar divider |
-| `line-strong` | `#2a2f38` | Outline buttons, active segment, watched badge |
-| `text` | `#eceef2` | Primary text |
-| `text-secondary` | `#c9ced8` | Section headings |
-| `text-muted` | `#9aa3b2` | Metadata, inactive nav, paths |
-| `text-faint` | `#8a93a3` | Row metadata, badge labels |
-| `accent` | `#8ea2ff` | Primary buttons, progress, new-file dot, logo |
-| `on-accent` | `#0f1115` | Text and icons on the accent |
-| `scrim-top` | `rgba(0,0,0,0.65)` to transparent | Gradient behind the player header |
-| `scrim-bottom` | transparent to `rgba(0,0,0,0.78)` | Gradient behind the player controls |
-| `overlay-button` | `rgba(255,255,255,0.12)` | Round buttons on top of video |
-| `overlay-card` | `rgba(18,20,25,0.92)` | Cards on top of video (up next, menus) |
-| `danger` | `#f28b82` | Errors (not in the mockups) |
-
-Accent alternatives that were offered: `#5fd4c4`, `#f2b36b`, `#e58fb6`. The accent is a single token so it can change later, or become a user setting.
-
-Text on `bg` and `surface` meets 4.5:1 for all text tokens above. Keep that true when adding colors.
-
-### Type
-
-Font: Inter, bundled with the app (`import "fonts/Inter-*.ttf";` in Slint). Use tabular figures for times.
-
-| Style | Size | Weight | Use |
-| --- | --- | --- | --- |
-| `title` | 28px | 700, letter-spacing -0.02em | Screen titles ("Home", "Season 2") |
-| `brand` | 18px | 700 | App name in the sidebar |
-| `section` | 17px | 600 | Section headings, player title |
-| `body-strong` | 15px | 600 | Tile titles, row titles, nav (active) |
-| `body` | 15px | 500 | Nav (inactive), watched row titles |
-| `label` | 14px | 500 | Buttons, breadcrumbs, secondary lines |
-| `meta` | 13px | 400 | Metadata, times |
-| `chip` | 12px | 500 | Source kind chips, "Up next in 8 s" |
-| `subtitle` | n/a | n/a | Drawn by mpv, never by the UI |
-
-### Spacing, size and shape
-
-- Spacing scale: 4, 8, 12, 16, 20, 24, 28, 36, 48 px.
-- Content padding: 48px left and right, 28 to 36px top.
-- Minimum touch target: 44x44px. Primary transport button: 56px. PiP play button: 60px.
-- Radii: 6px (small thumbnails), 10px (nav items, cards, thumbnails), 12px (tiles, PiP window), 14px (overlay cards), fully round for buttons and chips.
-- Shadows: only on floating windows and cards over other content (PiP: `0 18px 48px rgba(0,0,0,0.45)`). No shadows on tiles.
-- Icons: 24px grid, 1.75px stroke, round caps and joins, drawn at 20 to 22px. Use our own SVGs, kept in `crates/enthuse-app/ui/icons/`.
+- **Colors.** Dark, layered backgrounds (`bg`, `sidebar`, `surface`, `surface-raised`), two border strengths, four text strengths, and one accent (`accent`, periwinkle) for primary actions, progress and the new-file dot. Overlays on video use translucent fills (`overlay-*`) and scrims, never blur. Text on `bg` and `surface` meets 4.5:1 for every text token; keep that true when adding colors. The accent is a single token so it can change later or become a user setting.
+- **Type.** Inter, bundled under the OFL. A small set of styles: title, brand, section, body (strong and normal), label, meta and chip. Subtitles are drawn by mpv, never by the UI.
+- **Spacing and shape.** A 4px-based spacing scale, 48px content padding (24px when narrow), 44px minimum touch targets, 56px transport and 60px PiP play buttons. Rounded corners throughout, fully round buttons and chips. Shadows only on things that float over other content (PiP, toasts, tooltips, menus), never on tiles.
+- **Icons.** Our own SVGs on a 24px grid with a 1.75px stroke and round caps, drawn white and tinted with `colorize`, in `ui/icons/`.
 
 ## Components
 
@@ -150,6 +104,10 @@ Decided 2026-11-17:
 - PiP: frameless (`no-frame: true`), with our own controls and drag-to-move.
 - Fullscreen playback hides the frame.
 
+### Recent
+
+Sidebar, then the title "Recent" and up to 50 recently played files, watched or not, most recent first. Rows look like folder rows: thumbnail, "Harbor Lights, S02E06 Lantern Rock", "Harbor Lights / Season 2, 3 h ago", and the Watched or time-left badge. Tapping a row plays or resumes it. Files of removed sources are left out. When nothing has been played: "Nothing played yet."
+
 ### Settings
 
 Sidebar, then one column (at most 820px wide) of grouped cards:
@@ -169,7 +127,7 @@ Every change is saved at once; there is no Save button.
 | --- | --- |
 | Hover | Tiles, rows and nav items: background one step lighter (`surface` becomes `surface-raised`, transparent becomes `surface`). Buttons: brighten 10%. Animate 120ms. |
 | Pressed | Darken 10% and no animation delay. |
-| Keyboard focus | 2px accent outline, 2px offset, on every focusable element. Arrow keys move through grids and lists, Enter activates, Escape goes back. |
+| Keyboard focus | 2px accent outline, 2px offset, on every focusable element (drawn inside rows that sit in a clipped card). Tab moves between elements. Arrow keys move within a list, grid, the Home cards and tiles, and the sidebar; with nothing focused, an arrow key focuses the first visible item. Enter or Space activates, Escape goes back. Buttons that stay on screen (steppers, switches, segments) keep focus after a press. |
 | Disabled | 40% opacity, no hover. |
 | Loading a folder | Keep the header, show 6 placeholder rows (`surface`, no shimmer). Show them only if loading takes over 150ms. |
 | Empty folder | Centered message "No videos in this folder" in `text-muted`, with a "Back" button. |
@@ -179,7 +137,7 @@ Every change is saved at once; there is no Save button.
 | File missing or failed to open | Toast at the bottom: "Couldn't play E05" with the reason from the player, and the browser stays where it was. |
 | Playback error mid-file | Overlay stays visible with the message and "Retry" and "Back". |
 | Buffering | 32px spinner in the center over the video; controls stay usable. |
-| Long names | Titles ellipsize at the end on one line; full name in a tooltip on hover. |
+| Long names | Titles ellipsize at the end on one line. Resting the pointer on the row for 0.7 s shows the full name in a tooltip under it (`TipText`). The tip is drawn by a layer over the screens, so it never catches clicks. |
 | Narrow window | Below 900px wide the sidebar collapses to a 72px icon rail, Continue watching shows 2 or 3 cards, sources 2 per row. |
 
 ## Slint notes

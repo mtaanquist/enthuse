@@ -31,6 +31,8 @@ const PRUNE_EVERY: u32 = 200;
 pub struct Job {
     source: Arc<dyn Source>,
     path: SourcePath,
+    /// On a network share, so it can be dropped when those are turned off.
+    network: bool,
 }
 
 /// Names a file across sources, to match results to rows and cards.
@@ -134,6 +136,7 @@ impl Thumbs {
                 Job {
                     source: src.clone(),
                     path: path.clone(),
+                    network: is_network_location(location),
                 },
             );
         }
@@ -152,6 +155,7 @@ impl Thumbs {
         let Some(shared) = &self.shared else {
             return;
         };
+        let network = is_network_location(location);
         let jobs: Vec<_> = if self.allowed(location) {
             let known = self.known.borrow();
             files
@@ -162,6 +166,7 @@ impl Thumbs {
                     let job = Job {
                         source: src.clone(),
                         path: path.clone(),
+                        network,
                     };
                     (id, job)
                 })
@@ -181,6 +186,19 @@ impl Thumbs {
             && let Ok(mut q) = shared.queue.lock()
         {
             q.set_folder(Vec::new());
+        }
+    }
+
+    /// The network thumbnail setting changed: when off, drops the waiting
+    /// jobs for network shares (a running one finishes).
+    pub fn settings_changed(&self) {
+        if self.store.network_thumbnails().unwrap_or(true) {
+            return;
+        }
+        if let Some(shared) = &self.shared
+            && let Ok(mut q) = shared.queue.lock()
+        {
+            q.retain(|job| !job.network);
         }
     }
 
