@@ -8,12 +8,13 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use enthuse_core::folder::{continue_subtitle, display_title, progress};
-use enthuse_core::source::SourcePath;
+use enthuse_core::source::{SourcePath, is_network_location};
 use enthuse_core::storage::{SourceId, Store};
 use slint::{ComponentHandle, Model, ModelRc, VecModel, Weak};
 
 use crate::browser::{Browser, SourceRef};
 use crate::nav::Nav;
+use crate::thumbs::{Thumbs, thumb_id};
 use crate::{AppWindow, BrowserWindow, ContinueItem, HomeModel, SourceIcon, SourceTileItem, bg};
 
 /// Cards in the "Continue watching" row.
@@ -27,6 +28,9 @@ pub struct Home {
     nav: RefCell<Option<std::rc::Weak<Nav>>>,
     /// What each "Continue watching" card plays.
     items: RefCell<Vec<(SourceRef, SourcePath)>>,
+    /// The "Continue watching" cards, for putting thumbnails on them.
+    cards: Rc<VecModel<ContinueItem>>,
+    thumbs: RefCell<Option<Rc<Thumbs>>>,
     /// Shown source tiles, for marking offline ones when the check returns.
     tiles: Rc<VecModel<SourceTileItem>>,
     /// Last reachability result per source: true when offline.
@@ -69,6 +73,8 @@ impl Home {
             browser,
             nav: Default::default(),
             items: Default::default(),
+            cards: Rc::new(VecModel::default()),
+            thumbs: Default::default(),
             tiles: Rc::new(VecModel::default()),
             offline: Default::default(),
             checking: Default::default(),
@@ -89,6 +95,29 @@ impl Home {
     pub fn attach_side(self: &Rc<Self>, window: &BrowserWindow) {
         wire_callbacks!(window, self);
         *self.side.borrow_mut() = Some(window.as_weak());
+        self.refresh();
+    }
+
+    /// Shows thumbnails from `thumbs` on the "Continue watching" cards.
+    pub fn set_thumbs(self: &Rc<Self>, thumbs: &Rc<Thumbs>) {
+        let weak = Rc::downgrade(self);
+        thumbs.on_ready(move |id, image| {
+            let Some(this) = weak.upgrade() else {
+                return;
+            };
+            let index = this
+                .items
+                .borrow()
+                .iter()
+                .position(|(s, p)| thumb_id(s.id, p) == id);
+            if let Some(index) = index
+                && let Some(mut card) = this.cards.row_data(index)
+            {
+                card.thumbnail = image.clone();
+                this.cards.set_row_data(index, card);
+            }
+        });
+        *self.thumbs.borrow_mut() = Some(thumbs.clone());
         self.refresh();
     }
 
@@ -118,15 +147,31 @@ impl Home {
             });
         let mut items = Vec::new();
         let mut cards = Vec::new();
+        let thumbs = self.thumbs.borrow().clone();
+        let locations: HashMap<SourceId, String> = self
+            .browser
+            .sources()
+            .into_iter()
+            .map(|(s, location)| (s.id, location))
+            .collect();
         for (id, path, state) in recent {
             let Some(source) = self.browser.source_by_id(id) else {
                 continue;
             };
             let name = path.name().unwrap_or_default().to_owned();
+            let thumbnail = match &thumbs {
+                Some(t) => {
+                    let location = locations.get(&id).map_or("", String::as_str);
+                    t.want(id, &source.source, location, &path);
+                    t.image(&thumb_id(id, &path))
+                }
+                None => Default::default(),
+            };
             cards.push(ContinueItem {
                 title: display_title(&name).into(),
                 subtitle: continue_subtitle(&name, &state).into(),
                 progress: progress(&state) as f32,
+                thumbnail,
             });
             items.push((source, path));
             if cards.len() == CONTINUE_LIMIT {
@@ -148,7 +193,8 @@ impl Home {
         };
         self.tiles.set_vec(tiles);
 
-        let cards = ModelRc::new(VecModel::from(cards));
+        self.cards.set_vec(cards);
+        let cards = ModelRc::from(self.cards.clone());
         let tiles = ModelRc::from(self.tiles.clone());
         self.each_model(|m| {
             m.set_continue_items(cards.clone());
@@ -243,7 +289,7 @@ impl Home {
 /// The tile for a source with `name` at `location`. UNC paths
 /// (`\\server\share`, or `//server/share`) are network shares.
 fn tile(name: &str, location: &str, offline: bool) -> SourceTileItem {
-    let network = is_network_path(location);
+    let network = is_network_location(location);
     SourceTileItem {
         name: name.into(),
         detail: location.into(),
@@ -261,22 +307,5 @@ fn tile(name: &str, location: &str, offline: bool) -> SourceTileItem {
             SourceIcon::Drive
         },
         offline,
-    }
-}
-
-fn is_network_path(location: &str) -> bool {
-    location.starts_with(r"\\") || location.starts_with("//") || location.starts_with("smb://")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn unc_paths_are_network_shares() {
-        assert!(is_network_path(r"\\nas\media"));
-        assert!(is_network_path("//nas/media"));
-        assert!(!is_network_path(r"D:\Movies"));
-        assert!(!is_network_path("/mnt/media"));
     }
 }

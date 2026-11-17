@@ -19,6 +19,7 @@ pub const DEFAULT_WATCHED_THRESHOLD: f64 = 0.9;
 
 const KEY_WATCHED_THRESHOLD: &str = "watched_threshold";
 const KEY_RESUME: &str = "resume";
+const KEY_NETWORK_THUMBNAILS: &str = "network_thumbnails";
 
 /// Storage error.
 #[derive(Debug)]
@@ -379,6 +380,18 @@ impl Store {
         Ok(())
     }
 
+    /// Whether to make thumbnails for files on network shares. On unless
+    /// turned off, since grabbing a frame reads part of each file.
+    pub fn network_thumbnails(&self) -> Result<bool> {
+        Ok(self
+            .setting(KEY_NETWORK_THUMBNAILS)?
+            .is_none_or(|v| v != "0"))
+    }
+
+    pub fn set_network_thumbnails(&self, on: bool) -> Result<()> {
+        self.set_setting(KEY_NETWORK_THUMBNAILS, if on { "1" } else { "0" })
+    }
+
     /// Global playback settings, used where no folder overrides them.
     pub fn default_playback_settings(&self) -> Result<PlaybackSettings> {
         let mut s = PlaybackSettings::default();
@@ -668,6 +681,16 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM folder_settings", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn network_thumbnails_default_on() {
+        let s = Store::open_in_memory().unwrap();
+        assert!(s.network_thumbnails().unwrap());
+        s.set_network_thumbnails(false).unwrap();
+        assert!(!s.network_thumbnails().unwrap());
+        s.set_network_thumbnails(true).unwrap();
+        assert!(s.network_thumbnails().unwrap());
     }
 
     #[test]

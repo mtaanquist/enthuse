@@ -6,6 +6,7 @@ import { Spinner } from "std-widgets.slint";
 import { Theme, Icons } from "theme.slint";
 import { ButtonVariant, IconButton, PillButton } from "components/buttons.slint";
 import { ButtonBehavior } from "components/behavior.slint";
+import { Thumb } from "browser.slint";
 
 export struct TrackItem {
     id: int,
@@ -67,6 +68,7 @@ export global PlayerModel {
     in property <int> up-next-seconds;
     // "S02E06 Lantern Rock"
     in property <string> up-next-title;
+    in property <image> up-next-thumbnail;
     callback up-next-play();
     callback up-next-cancel();
 }
@@ -295,20 +297,12 @@ component UpNextCard inherits Rectangle {
         padding: Theme.space-16;
         spacing: Theme.space-16;
 
-        // Thumbnail slot (#68). Left out when narrow, so the buttons fit.
-        if root.width >= 340px: Rectangle {
+        // Left out when narrow, so the buttons fit.
+        if root.width >= 340px: Thumb {
             width: 96px;
             height: 54px;
             y: (parent.height - self.height) / 2;
-            border-radius: Theme.radius-small;
-            background: Theme.surface-raised;
-
-            Image {
-                width: Theme.icon-size;
-                height: Theme.icon-size;
-                source: Icons.video;
-                colorize: Theme.text-faint;
-            }
+            picture: PlayerModel.up-next-thumbnail;
         }
 
         VerticalLayout {

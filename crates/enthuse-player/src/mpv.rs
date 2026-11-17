@@ -165,7 +165,7 @@ fn as_seconds(data: &PropertyData<'_>) -> Option<f64> {
 
 /// Readable text for a libmpv error, e.g. "loading failed" instead of
 /// "Raw(-13)".
-fn describe(err: &libmpv2::Error) -> String {
+pub(crate) fn describe(err: &libmpv2::Error) -> String {
     match err {
         libmpv2::Error::Raw(code) => {
             // SAFETY: mpv_error_string accepts any code and returns a pointer

@@ -13,5 +13,6 @@ pub mod resume;
 pub mod settings;
 pub mod source;
 pub mod storage;
+pub mod thumbs;
 pub mod time;
 pub mod up_next;

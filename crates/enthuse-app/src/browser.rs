@@ -12,8 +12,9 @@ use enthuse_core::settings::cycle;
 use enthuse_core::source::{Entry, EntryKind, LocalFs, Source, SourceError, SourcePath};
 use enthuse_core::storage::{SourceId, Store};
 use enthuse_core::time::format_minutes;
-use slint::{ComponentHandle, ModelRc, SharedString, Timer, TimerMode, VecModel, Weak};
+use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel, Weak};
 
+use crate::thumbs::{Thumbs, thumb_id};
 use crate::{AppWindow, BrowserItem, BrowserModel, BrowserWindow, ItemBadge, ItemKind, bg};
 
 /// How long a message from [`Browser::show_error`] stays.
@@ -120,6 +121,7 @@ pub struct Browser {
     /// Runs after a source is added or removed, or the browser refreshes
     /// (e.g. after playback), so Home can update.
     on_change: RefCell<Option<Box<dyn Fn()>>>,
+    thumbs: RefCell<Option<Rc<Thumbs>>>,
 }
 
 impl Browser {
@@ -138,6 +140,7 @@ impl Browser {
             generation: Default::default(),
             on_play: Default::default(),
             on_change: Default::default(),
+            thumbs: Default::default(),
         });
         this.load_sources();
 
@@ -160,6 +163,43 @@ impl Browser {
     pub fn set_view(self: &Rc<Self>, view: View) {
         *self.view.borrow_mut() = view;
         self.refresh();
+    }
+
+    /// Shows thumbnails from `thumbs` on video rows and cards.
+    pub fn set_thumbs(self: &Rc<Self>, thumbs: &Rc<Thumbs>) {
+        let weak = Rc::downgrade(self);
+        thumbs.on_ready(move |id, image| {
+            if let Some(this) = weak.upgrade() {
+                this.thumb_ready(id, image);
+            }
+        });
+        *self.thumbs.borrow_mut() = Some(thumbs.clone());
+    }
+
+    /// Puts a thumbnail that just arrived on its row, if it is shown.
+    fn thumb_ready(&self, id: &str, image: &slint::Image) {
+        let Location::Folder { source, .. } = *self.location.borrow() else {
+            return;
+        };
+        let Some(source_id) = self.sources.borrow().get(source).map(|s| s.source.id) else {
+            return;
+        };
+        let Some(index) = self
+            .entries
+            .borrow()
+            .iter()
+            .position(|e| e.kind == EntryKind::Video && thumb_id(source_id, &e.path) == id)
+        else {
+            return;
+        };
+        let Some(ui) = self.ui() else {
+            return;
+        };
+        let items = ui.model().get_items();
+        if let Some(mut item) = items.row_data(index) {
+            item.thumbnail = image.clone();
+            items.set_row_data(index, item);
+        }
     }
 
     fn ui(&self) -> Option<Ui> {
@@ -355,6 +395,10 @@ impl Browser {
             *g
         };
         self.action.set(None);
+        // The new folder asks for its own once listed.
+        if let Some(thumbs) = self.thumbs.borrow().as_ref() {
+            thumbs.clear_folder();
+        }
         let Some(ui) = self.ui() else {
             return;
         };
@@ -418,6 +462,7 @@ impl Browser {
                 badge: ItemBadge::None,
                 badge_text: SharedString::new(),
                 progress: -1.0,
+                thumbnail: Default::default(),
             })
             .collect();
         w.set_title("Sources".into());
@@ -459,6 +504,11 @@ impl Browser {
             .playback_settings(source, folder)
             .map_or(true, |s| s.resume);
         let view = FolderView::new(&entries, &states, resume);
+        let thumbs = self.thumbs.borrow().clone();
+        let thumbnail = |e: &Entry| match (&thumbs, e.kind) {
+            (Some(t), EntryKind::Video) => t.image(&thumb_id(source, &e.path)),
+            _ => Default::default(),
+        };
         let items: Vec<_> = entries
             .iter()
             .zip(&view.badges)
@@ -482,12 +532,29 @@ impl Browser {
                         Badge::Resume { fraction, .. } => fraction.unwrap_or(0.0) as f32,
                         _ => -1.0,
                     },
+                    thumbnail: thumbnail(e),
                 }
             })
             .collect();
         w.set_summary(view.summary().into());
         w.set_action_text(view.action_label(&entries).unwrap_or_default().into());
         self.action.set(view.action.as_ref().map(|a| a.index()));
+        if let Some(thumbs) = &thumbs {
+            let slot = self
+                .sources
+                .borrow()
+                .iter()
+                .find(|s| s.source.id == source)
+                .map(|s| (s.source.source.clone(), s.location.clone()));
+            if let Some((src, location)) = slot {
+                let files: Vec<_> = entries
+                    .iter()
+                    .filter(|e| e.kind == EntryKind::Video)
+                    .map(|e| e.path.clone())
+                    .collect();
+                thumbs.want_folder(source, &src, &location, &files);
+            }
+        }
         *self.entries.borrow_mut() = entries;
         w.set_items(ModelRc::new(VecModel::from(items)));
     }
