@@ -23,6 +23,7 @@ Infuse-style media player for Windows and Linux. Browse folders on local disks a
 - Let the player draw subtitles. Do not render subtitles in the UI layer.
 - PiP is a separate borderless, always-on-top, freely resizable window that reuses the same player. Wayland cannot guarantee always-on-top; degrade gracefully.
 - Keep the UI touch-friendly.
+- Branding: the name nods to Infuse on purpose, but the logo, icons, colors and visual style must stay clearly our own. Do not copy Infuse's assets, layouts or look.
 
 ## Before opening a PR
 
