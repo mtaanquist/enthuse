@@ -5,3 +5,4 @@
 //! unit tested on any platform.
 
 pub mod paths;
+pub mod time;

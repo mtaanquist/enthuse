@@ -1,9 +1,10 @@
 //! Enthuse desktop app: Slint UI and wiring.
 //!
-//! Currently the render spike (#17): plays one file or URL with mpv drawn
-//! underneath a Slint button. `--self-test` plays a built-in test pattern and
-//! checks a snapshot of the window, for CI.
+//! Plays one file or URL with the playback screen drawn over the video.
+//! `--self-test` plays a built-in test pattern and checks a snapshot of the
+//! window, for CI.
 
+mod playback;
 mod selftest;
 mod video;
 
@@ -58,49 +59,26 @@ fn run(source: &str, self_test: bool) -> Result<ExitCode, Box<dyn std::error::Er
     };
     let player: Arc<dyn Player> = Arc::new(MpvPlayer::new(options)?);
 
-    // Drain player events on the UI thread whenever mpv signals some.
-    {
-        let weak_player = Arc::downgrade(&player);
-        player.set_wakeup(Arc::new(move || {
-            let weak_player = weak_player.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(p) = weak_player.upgrade() {
-                    while let Some(_event) = p.poll_event() {}
-                }
-            });
-        }));
-    }
-
-    let window = SpikeWindow::new()?;
+    let window = AppWindow::new()?;
+    let playback = playback::Playback::new(&window, player.clone());
     let capture = video::ScreenCapture::default();
     // mpv needs the render context before a file is loaded, and the render
     // context needs Slint's GL context, which exists once the window is shown.
     {
-        let p = player.clone();
+        let playback = playback.clone();
         let source = source.to_owned();
+        let title = title_for(&source);
         video::attach(
             &window,
             player.clone(),
-            move || {
-                if let Err(err) = p.open(&source, None) {
-                    eprintln!("enthuse: cannot open {source}: {err}");
-                }
-            },
+            move || playback.open(&source, &title, None),
             capture.clone(),
         )?;
     }
-
-    {
-        let player = player.clone();
-        let weak = window.as_weak();
-        window.on_toggle_pause(move || {
-            let paused = !player.is_paused();
-            let _ = player.set_paused(paused);
-            if let Some(w) = weak.upgrade() {
-                w.set_paused(paused);
-            }
-        });
-    }
+    // Without a browser yet, "back" closes the app.
+    window.on_back(|| {
+        let _ = slint::quit_event_loop();
+    });
 
     let outcome = if self_test {
         selftest::start(&window, player.clone(), capture)
@@ -110,4 +88,13 @@ fn run(source: &str, self_test: bool) -> Result<ExitCode, Box<dyn std::error::Er
 
     window.run()?;
     Ok(outcome.exit_code())
+}
+
+/// File name for display, from a path or URL.
+fn title_for(source: &str) -> String {
+    source
+        .rsplit(['/', '\\'])
+        .find(|s| !s.is_empty())
+        .unwrap_or(source)
+        .to_owned()
 }
