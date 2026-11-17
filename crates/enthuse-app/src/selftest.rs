@@ -160,12 +160,14 @@ const VIDEO_PROBES: &[Probe] = &[
 /// Color tolerance per channel: YUV conversion and scaling shift colors a bit.
 const TOLERANCE: i32 = 48;
 
-/// Play button center in logical pixels from the bottom-left corner: the
-/// gutter plus half a button across, half the bottom bar up (see `Layout` in
-/// app.slint).
+/// A point on the play button's accent fill in logical pixels from the
+/// bottom-left corner: the gutter plus half a button across, and 20px below
+/// the button's center (half the bottom bar up), clear of the icon. See
+/// `Layout` in app.slint.
 const BUTTON_FROM_LEFT: f32 = 16.0 + 56.0 / 2.0;
-const BUTTON_FROM_BOTTOM: f32 = 96.0 / 2.0;
-const BUTTON_RGB: [u8; 3] = [0xff, 0x00, 0x80];
+const BUTTON_FROM_BOTTOM: f32 = 96.0 / 2.0 - 20.0;
+/// `Theme.accent`.
+const BUTTON_RGB: [u8; 3] = [0x8e, 0xa2, 0xff];
 
 fn check(snapshot: &SharedPixelBuffer<Rgba8Pixel>) -> Vec<String> {
     let (w, h) = (snapshot.width(), snapshot.height());

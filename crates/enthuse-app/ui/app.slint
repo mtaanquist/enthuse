@@ -1,6 +1,9 @@
-// Enthuse main window. Functional prototype UI: polish comes later.
+// Enthuse main window. The screens still have the prototype layout; they
+// move to the design in docs/ui.md issue by issue (milestone M2).
 
 import { ListView, LineEdit } from "std-widgets.slint";
+import { Theme, Icons } from "theme.slint";
+import { ButtonVariant, IconButton, PillButton } from "components/buttons.slint";
 //
 // The window background is transparent so the video, drawn underneath by
 // mpv, shows through. Pages that are not the player draw their own
@@ -26,64 +29,8 @@ export struct BrowserItem {
 // Fixed geometry the self-test relies on (see src/selftest.rs).
 export global Layout {
     out property <length> bar-height: 96px;
-    out property <length> button-size: 56px;
-    out property <length> gutter: 16px;
-}
-
-global Palette {
-    out property <color> accent: #ff0080;
-    out property <color> accent-pressed: #c00060;
-    out property <color> bar: #101418cc;
-    out property <color> text: #f4f6f8;
-    out property <color> muted: #9aa4ae;
-    out property <color> page: #14181c;
-    out property <color> row-pressed: #ffffff18;
-    out property <color> error: #ff8a80;
-}
-
-component IconButton inherits Rectangle {
-    in property <string> label;
-    in property <bool> primary;
-    callback clicked();
-
-    width: Layout.button-size;
-    height: Layout.button-size;
-    border-radius: self.height / 2;
-    background: primary ? (touch.pressed ? Palette.accent-pressed : Palette.accent)
-                        : (touch.pressed ? #ffffff40 : #ffffff20);
-
-    Text {
-        text: root.label;
-        color: Palette.text;
-        font-size: 15px;
-        font-weight: 600;
-    }
-
-    touch := TouchArea {
-        clicked => { root.clicked(); }
-    }
-}
-
-// Like IconButton, but sized to its text, for settings such as "Resume: On".
-component PillButton inherits Rectangle {
-    in property <string> label;
-    callback clicked();
-
-    width: label-text.preferred-width + 2 * Layout.gutter;
-    height: Layout.button-size;
-    border-radius: self.height / 2;
-    background: touch.pressed ? #ffffff40 : #ffffff20;
-
-    label-text := Text {
-        text: root.label;
-        color: Palette.text;
-        font-size: 15px;
-        font-weight: 600;
-    }
-
-    touch := TouchArea {
-        clicked => { root.clicked(); }
-    }
+    out property <length> button-size: Theme.transport-button-size;
+    out property <length> gutter: Theme.space-16;
 }
 
 // Seek bar: tap or drag anywhere to seek. Large hit area for touch.
@@ -98,24 +45,24 @@ component SeekBar inherits Rectangle {
 
     track := Rectangle {
         y: (parent.height - self.height) / 2;
-        height: 6px;
-        border-radius: 3px;
-        background: #ffffff40;
+        height: 4px;
+        border-radius: 2px;
+        background: Theme.track;
 
         Rectangle {
             x: 0;
             width: parent.width * root.fraction;
-            border-radius: 3px;
-            background: Palette.accent;
+            border-radius: 2px;
+            background: Theme.accent;
         }
     }
 
     Rectangle {
         x: track.width * root.fraction - self.width / 2;
-        width: 18px;
-        height: 18px;
-        border-radius: 9px;
-        background: Palette.text;
+        width: 16px;
+        height: 16px;
+        border-radius: 8px;
+        background: Theme.on-video;
     }
 
     touch := TouchArea {
@@ -159,11 +106,13 @@ component PlayerPage inherits Rectangle {
         x: 0;
         y: 0;
         height: Layout.button-size + 2 * Layout.gutter;
-        background: @linear-gradient(180deg, #000000a0 0%, #00000000 100%);
+        background: Theme.scrim-top;
 
         IconButton {
             x: Layout.gutter;
             y: Layout.gutter;
+            variant: ButtonVariant.overlay;
+            icon: Icons.back;
             label: "Back";
             clicked => { root.back(); }
         }
@@ -172,8 +121,8 @@ component PlayerPage inherits Rectangle {
             x: Layout.gutter * 2 + Layout.button-size;
             width: parent.width - self.x - Layout.gutter;
             text: root.title;
-            color: Palette.text;
-            font-size: 18px;
+            color: Theme.text;
+            font-size: Theme.section-size;
             overflow: elide;
             vertical-alignment: center;
         }
@@ -183,13 +132,13 @@ component PlayerPage inherits Rectangle {
         width: min(parent.width - 2 * Layout.gutter, 520px);
         height: 72px;
         border-radius: 12px;
-        background: Palette.bar;
+        background: Theme.overlay-card;
 
         Text {
             width: parent.width - 2 * Layout.gutter;
             text: root.message;
-            color: Palette.text;
-            font-size: 16px;
+            color: Theme.text;
+            font-size: Theme.body-size;
             wrap: word-wrap;
             horizontal-alignment: center;
             vertical-alignment: center;
@@ -201,12 +150,14 @@ component PlayerPage inherits Rectangle {
         x: 0;
         y: parent.height - Layout.bar-height;
         height: Layout.bar-height;
-        background: Palette.bar;
+        background: Theme.overlay-card;
 
         play := IconButton {
             x: Layout.gutter;
             y: (parent.height - self.height) / 2;
-            primary: true;
+            size: Layout.button-size;
+            variant: ButtonVariant.primary;
+            icon: root.paused ? Icons.play : Icons.pause;
             label: root.paused ? "Play" : "Pause";
             clicked => { root.toggle-pause(); }
         }
@@ -214,14 +165,18 @@ component PlayerPage inherits Rectangle {
         subs := IconButton {
             x: parent.width - self.width - Layout.gutter;
             y: (parent.height - self.height) / 2;
-            label: "Subs";
+            variant: ButtonVariant.overlay;
+            icon: Icons.subtitles;
+            label: "Subtitles";
             clicked => { root.show-subtitles = !root.show-subtitles; }
         }
 
         pip := IconButton {
             x: subs.x - self.width - Layout.gutter;
             y: (parent.height - self.height) / 2;
-            label: "PiP";
+            variant: ButtonVariant.overlay;
+            icon: Icons.pip;
+            label: "Picture in picture";
             clicked => { root.toggle-pip(); }
         }
 
@@ -229,8 +184,8 @@ component PlayerPage inherits Rectangle {
             x: pip.x - self.width - Layout.gutter;
             width: 130px;
             text: root.position-text + " / " + root.duration-text;
-            color: Palette.muted;
-            font-size: 14px;
+            color: Theme.text-muted;
+            font-size: Theme.meta-size;
             horizontal-alignment: right;
             vertical-alignment: center;
         }
@@ -252,7 +207,7 @@ component PlayerPage inherits Rectangle {
         x: parent.width - self.width - Layout.gutter;
         y: parent.height - Layout.bar-height - self.height - Layout.gutter;
         border-radius: 12px;
-        background: Palette.bar;
+        background: Theme.overlay-card;
         clip: true;
 
         list := VerticalLayout {
@@ -260,14 +215,14 @@ component PlayerPage inherits Rectangle {
             for track in root.subtitle-tracks: Rectangle {
                 height: 48px;
                 border-radius: 8px;
-                background: item-touch.pressed ? #ffffff30 : (track.selected ? #ffffff18 : transparent);
+                background: item-touch.pressed ? Theme.overlay-button : (track.selected || item-touch.has-hover) ? rgba(255, 255, 255, 0.06) : transparent;
 
                 Text {
                     x: 12px;
                     width: parent.width - 24px;
                     text: (track.selected ? "* " : "  ") + track.label;
-                    color: Palette.text;
-                    font-size: 15px;
+                    color: Theme.text;
+                    font-size: Theme.body-size;
                     overflow: elide;
                     vertical-alignment: center;
                 }
@@ -291,21 +246,26 @@ component BrowserRow inherits Rectangle {
     callback remove();
 
     height: 64px;
-    background: touch.pressed ? Palette.row-pressed : transparent;
+    border-radius: Theme.radius-medium;
+    background: touch.pressed ? Theme.pressed(Theme.surface) : touch.has-hover ? Theme.surface : transparent;
 
-    // Kind badge: our own simple shapes, no icon set needed for M1.
+    animate background {
+        duration: touch.pressed ? 0ms : Theme.hover-duration;
+    }
+
+    // Kind icon. Thumbnails replace it for videos later (M2).
     badge := Rectangle {
         x: Layout.gutter;
-        width: 36px;
-        height: 36px;
-        border-radius: root.item.kind == 2 ? 18px : 6px;
-        background: root.item.kind == 2 && !root.item.watched ? Palette.accent : #ffffff30;
+        width: Theme.touch-target;
+        height: Theme.touch-target;
+        border-radius: Theme.radius-medium;
+        background: Theme.surface-raised;
 
-        Text {
-            text: root.item.kind == 0 ? "S" : root.item.kind == 1 ? "F" : ">";
-            color: Palette.text;
-            font-size: 15px;
-            font-weight: 700;
+        Image {
+            width: Theme.icon-size;
+            height: Theme.icon-size;
+            source: root.item.kind == 0 ? Icons.drive : root.item.kind == 1 ? Icons.folder : Icons.video;
+            colorize: root.item.kind == 2 && !root.item.watched ? Theme.accent : Theme.text-muted;
         }
     }
 
@@ -316,15 +276,16 @@ component BrowserRow inherits Rectangle {
 
         Text {
             text: root.item.label;
-            color: Palette.text;
-            font-size: 17px;
+            color: root.item.watched ? Theme.text-muted : Theme.text;
+            font-size: Theme.body-size;
+            font-weight: root.item.watched ? Theme.body-weight : Theme.body-strong-weight;
             overflow: elide;
         }
 
         if root.item.detail != "": Text {
             text: root.item.detail;
-            color: Palette.muted;
-            font-size: 13px;
+            color: Theme.text-faint;
+            font-size: Theme.meta-size;
             overflow: elide;
         }
     }
@@ -339,34 +300,24 @@ component BrowserRow inherits Rectangle {
         y: parent.height - 8px;
         width: parent.width - self.x - Layout.gutter;
         height: 3px;
-        background: #ffffff30;
+        background: Theme.line-strong;
 
         Rectangle {
             x: 0;
             width: parent.width * root.item.progress;
-            background: Palette.accent;
+            background: Theme.accent;
         }
     }
 
     // After the row's TouchArea, so it gets the clicks.
-    remove := Rectangle {
+    remove := IconButton {
         x: parent.width - self.width - Layout.gutter;
-        width: root.removable ? 88px : 0px;
-        height: 44px;
+        y: (parent.height - self.height) / 2;
         visible: root.removable;
-        border-radius: 8px;
-        background: remove-touch.pressed ? #ffffff40 : #ffffff18;
-
-        Text {
-            text: "Remove";
-            color: Palette.muted;
-            font-size: 13px;
-        }
-
-        remove-touch := TouchArea {
-            enabled: root.removable;
-            clicked => { root.remove(); }
-        }
+        enabled: root.removable;
+        icon: Icons.close;
+        label: "Remove source";
+        clicked => { root.remove(); }
     }
 }
 
@@ -392,7 +343,7 @@ component BrowserPage inherits Rectangle {
         }
     }
 
-    background: Palette.page;
+    background: Theme.bg;
 
     top := Rectangle {
         x: 0;
@@ -402,16 +353,17 @@ component BrowserPage inherits Rectangle {
         if root.can-go-up: IconButton {
             x: Layout.gutter;
             y: Layout.gutter;
+            icon: Icons.back;
             label: "Up";
             clicked => { root.up(); }
         }
 
         Text {
-            x: root.can-go-up ? Layout.gutter * 2 + Layout.button-size : Layout.gutter;
+            x: root.can-go-up ? Layout.gutter * 2 + Theme.touch-target : Layout.gutter;
             width: resume.x - self.x - Layout.gutter;
             text: root.heading;
-            color: Palette.text;
-            font-size: 20px;
+            color: Theme.text;
+            font-size: Theme.section-size;
             font-weight: 600;
             overflow: elide;
             vertical-alignment: center;
@@ -420,15 +372,16 @@ component BrowserPage inherits Rectangle {
         resume := PillButton {
             x: add.x - self.width - Layout.gutter;
             y: Layout.gutter;
-            label: root.resume-label;
+            text: root.resume-label;
             clicked => { root.cycle-resume(); }
         }
 
         add := IconButton {
             x: parent.width - self.width - Layout.gutter;
             y: Layout.gutter;
-            primary: true;
-            label: root.adding ? "Close" : "Add";
+            variant: root.adding ? ButtonVariant.outline : ButtonVariant.primary;
+            icon: root.adding ? Icons.close : Icons.add;
+            label: root.adding ? "Close" : "Add source";
             clicked => { root.adding = !root.adding; }
         }
     }
@@ -444,7 +397,7 @@ component BrowserPage inherits Rectangle {
             y: (parent.height - self.height) / 2;
             width: open.x - self.x - Layout.gutter;
             height: 48px;
-            font-size: 15px;
+            font-size: Theme.body-size;
             placeholder-text: "Folder path, mount or \\\\server\\share";
             accepted(text) => {
                 if (text != "") {
@@ -455,11 +408,11 @@ component BrowserPage inherits Rectangle {
             }
         }
 
-        open := IconButton {
+        open := PillButton {
             x: parent.width - self.width - Layout.gutter;
             y: (parent.height - self.height) / 2;
-            primary: true;
-            label: "Open";
+            variant: ButtonVariant.primary;
+            text: "Open";
             clicked => {
                 if (path.text != "") {
                     root.add-source(path.text);
@@ -493,8 +446,8 @@ component BrowserPage inherits Rectangle {
             : root.error != "" ? root.error
             : root.can-go-up ? "No folders or videos here."
             : "No sources yet. Use Add to open a folder.";
-        color: root.error != "" && !root.loading ? Palette.error : Palette.muted;
-        font-size: 16px;
+        color: root.error != "" && !root.loading ? Theme.danger : Theme.text-muted;
+        font-size: Theme.body-size;
         wrap: word-wrap;
         horizontal-alignment: center;
         vertical-alignment: center;
@@ -520,12 +473,12 @@ component NowPlayingBar inherits Rectangle {
     callback stop();
 
     height: Layout.bar-height + 28px;
-    background: #0c0f12;
+    background: Theme.sidebar;
 
     Rectangle {
         y: 0;
         height: 1px;
-        background: #ffffff18;
+        background: Theme.line;
     }
 
     Text {
@@ -534,8 +487,8 @@ component NowPlayingBar inherits Rectangle {
         width: time.x - self.x - Layout.gutter;
         height: 20px;
         text: root.message != "" ? root.message : root.title;
-        color: root.message != "" ? Palette.error : Palette.text;
-        font-size: 15px;
+        color: root.message != "" ? Theme.danger : Theme.text;
+        font-size: Theme.body-size;
         font-weight: 600;
         overflow: elide;
         vertical-alignment: center;
@@ -547,8 +500,8 @@ component NowPlayingBar inherits Rectangle {
         width: 130px;
         height: 20px;
         text: root.position-text + " / " + root.duration-text;
-        color: Palette.muted;
-        font-size: 14px;
+        color: Theme.text-muted;
+        font-size: Theme.meta-size;
         horizontal-alignment: right;
         vertical-alignment: center;
     }
@@ -560,14 +513,16 @@ component NowPlayingBar inherits Rectangle {
         back10 := IconButton {
             x: Layout.gutter;
             y: (parent.height - self.height) / 2;
-            label: "-10";
+            icon: Icons.back-10;
+            label: "Back 10 seconds";
             clicked => { root.seek-relative(-10); }
         }
 
         play := IconButton {
             x: back10.x + back10.width + Layout.gutter / 2;
             y: (parent.height - self.height) / 2;
-            primary: true;
+            variant: ButtonVariant.primary;
+            icon: root.paused ? Icons.play : Icons.pause;
             label: root.paused ? "Play" : "Pause";
             clicked => { root.toggle-pause(); }
         }
@@ -575,13 +530,15 @@ component NowPlayingBar inherits Rectangle {
         fwd10 := IconButton {
             x: play.x + play.width + Layout.gutter / 2;
             y: (parent.height - self.height) / 2;
-            label: "+10";
-            clicked => { root.seek-relative(10); }
+            icon: Icons.forward-30;
+            label: "Forward 30 seconds";
+            clicked => { root.seek-relative(30); }
         }
 
         stop := IconButton {
             x: parent.width - self.width - Layout.gutter;
             y: (parent.height - self.height) / 2;
+            icon: Icons.close;
             label: "Stop";
             clicked => { root.stop(); }
         }
@@ -589,7 +546,8 @@ component NowPlayingBar inherits Rectangle {
         video := PillButton {
             x: stop.x - self.width - Layout.gutter / 2;
             y: (parent.height - self.height) / 2;
-            label: "Back to video";
+            icon: Icons.pip-exit;
+            text: "Back to video";
             clicked => { root.show-video(); }
         }
 
@@ -629,7 +587,7 @@ component PipOverlay inherits Rectangle {
     property <length> edge: 8px;
     property <length> corner: 20px;
 
-    property <bool> hover: move-area.has-hover || exit-touch.has-hover || grip-touch.has-hover;
+    property <bool> hover: move-area.has-hover || exit.has-hover || grip-touch.has-hover;
 
     move-area := TouchArea {
         pointer-event(e) => {
@@ -672,25 +630,15 @@ component PipOverlay inherits Rectangle {
 
     // Controls stay visible but fade back when the pointer is away, so the
     // window stays usable on touch screens.
-    exit := Rectangle {
-        x: parent.width - self.width - 8px;
-        y: 8px;
-        width: 64px;
-        height: 36px;
-        border-radius: 18px;
-        background: exit-touch.pressed ? Palette.accent-pressed : Palette.accent;
+    exit := IconButton {
+        x: parent.width - self.width - Theme.space-8;
+        y: Theme.space-8;
+        size: Theme.touch-target;
+        variant: ButtonVariant.overlay;
+        icon: Icons.pip-exit;
+        label: "Back to full window";
         opacity: root.hover ? 1.0 : 0.5;
-
-        Text {
-            text: "Exit";
-            color: Palette.text;
-            font-size: 14px;
-            font-weight: 600;
-        }
-
-        exit-touch := TouchArea {
-            clicked => { root.exit-pip(); }
-        }
+        clicked => { root.exit-pip(); }
     }
 
     grip := Rectangle {
@@ -706,14 +654,14 @@ component PipOverlay inherits Rectangle {
             y: 22px;
             width: 16px;
             height: 3px;
-            background: Palette.text;
+            background: Theme.text;
         }
         Rectangle {
             x: 23px;
             y: 9px;
             width: 3px;
             height: 16px;
-            background: Palette.text;
+            background: Theme.text;
         }
 
         grip-touch := TouchArea {
@@ -738,6 +686,8 @@ export component AppWindow inherits Window {
     no-frame: root.pip-active;
     always-on-top: root.pip-active;
     background: transparent;
+    default-font-family: Theme.font-family;
+    default-font-size: Theme.body-size;
     forward-focus: keys;
 
     // 0 = folder browser, 1 = player.
@@ -861,7 +811,9 @@ export component BrowserWindow inherits Window {
     preferred-height: 480px;
     min-width: 360px;
     min-height: 360px;
-    background: Palette.page;
+    background: Theme.bg;
+    default-font-family: Theme.font-family;
+    default-font-size: Theme.body-size;
     forward-focus: keys;
 
     in property <string> browser-heading;

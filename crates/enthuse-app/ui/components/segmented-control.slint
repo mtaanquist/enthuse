@@ -1,0 +1,62 @@
+// Icon segments with one selected, such as the list or grid toggle.
+
+import { Theme } from "../theme.slint";
+import { ButtonBehavior } from "behavior.slint";
+
+export struct Segment {
+    icon: image,
+    // Accessible name.
+    label: string,
+}
+
+export component SegmentedControl inherits Rectangle {
+    in property <[Segment]> segments;
+    in-out property <int> selected;
+    callback selected-changed(int);
+
+    height: Theme.touch-target;
+    border-radius: self.height / 2;
+    border-width: 1px;
+    border-color: Theme.line;
+
+    HorizontalLayout {
+        padding: 3px;
+        spacing: 2px;
+
+        for segment[index] in root.segments: Rectangle {
+            property <bool> active: index == root.selected;
+
+            width: 52px;
+            border-radius: self.height / 2;
+            background: self.active ? Theme.line-strong : behavior.pressed ? Theme.pressed(Theme.surface) : behavior.has-hover ? Theme.surface : transparent;
+            forward-focus: behavior;
+            accessible-role: button;
+            accessible-label: segment.label;
+            accessible-checkable: true;
+            accessible-checked: self.active;
+            accessible-action-default => {
+                root.selected = index;
+                root.selected-changed(index);
+            }
+
+            animate background {
+                duration: Theme.hover-duration;
+            }
+
+            Image {
+                width: Theme.icon-size;
+                height: Theme.icon-size;
+                source: segment.icon;
+                colorize: parent.active ? Theme.text : Theme.text-muted;
+            }
+
+            behavior := ButtonBehavior {
+                ring-radius: parent.border-radius;
+                clicked => {
+                    root.selected = index;
+                    root.selected-changed(index);
+                }
+            }
+        }
+    }
+}
