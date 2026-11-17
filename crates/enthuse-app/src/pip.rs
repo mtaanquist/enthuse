@@ -19,7 +19,7 @@ use slint::{
 use crate::browser::{Browser, View};
 use crate::pip_geometry::{Edges, Rect, fit_aspect, resize};
 use crate::pointer;
-use crate::{AppWindow, BrowserWindow, KeyFocus};
+use crate::{AppWindow, BrowserModel, BrowserWindow, KeyFocus};
 
 /// PiP size when entering, in logical pixels; the video's ratio is fitted
 /// into it.
@@ -146,6 +146,9 @@ impl Pip {
         side.set_position(saved.position);
         // The browser window shows the section the main window was on.
         self.side.set_section(m.get_section());
+        self.side
+            .global::<BrowserModel>()
+            .set_view_mode(m.global::<BrowserModel>().get_view_mode());
         self.browser.set_view(View::Side(self.side.as_weak()));
         if let Err(err) = self.side.show() {
             eprintln!("enthuse: cannot open the browser window: {err}");
@@ -219,6 +222,8 @@ impl Pip {
         };
         let window = m.window();
         m.set_section(self.side.get_section());
+        m.global::<BrowserModel>()
+            .set_view_mode(self.side.global::<BrowserModel>().get_view_mode());
         m.set_pip_active(false);
         window.set_size(target.size);
         window.set_position(target.position);

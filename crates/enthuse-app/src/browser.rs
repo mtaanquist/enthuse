@@ -2,23 +2,22 @@
 //! player. Listing runs on a worker thread so a slow or offline share does
 //! not freeze the UI.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use enthuse_core::resume::{Marker, marker};
+use enthuse_core::folder::{Badge, FolderView, SortOrder};
 use enthuse_core::settings::cycle;
 use enthuse_core::source::{Entry, EntryKind, LocalFs, Source, SourceError, SourcePath};
 use enthuse_core::storage::{SourceId, Store};
-use enthuse_core::time::format_time;
-use slint::{ComponentHandle, ModelRc, SharedString, VecModel, Weak};
+use enthuse_core::time::format_minutes;
+use slint::{ComponentHandle, ModelRc, SharedString, Timer, TimerMode, VecModel, Weak};
 
-use crate::{AppWindow, BrowserItem, BrowserWindow, bg};
+use crate::{AppWindow, BrowserItem, BrowserModel, BrowserWindow, ItemBadge, ItemKind, bg};
 
-const KIND_SOURCE: i32 = 0;
-const KIND_FOLDER: i32 = 1;
-const KIND_VIDEO: i32 = 2;
+/// How long a message from [`Browser::show_error`] stays.
+const TOAST_TIME: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Stored `kind` for [`LocalFs`] sources.
 const LOCAL: &str = "local";
@@ -60,45 +59,38 @@ enum Ui {
     Side(BrowserWindow),
 }
 
-/// Both window types have the same `browser-*` properties; forward to
-/// whichever one shows the browser.
-macro_rules! ui_setters {
-    ($($name:ident: $ty:ty),* $(,)?) => {
-        impl Ui {
-            $(fn $name(&self, value: $ty) {
-                match self {
-                    Ui::Main(w) => w.$name(value),
-                    Ui::Side(w) => w.$name(value),
-                }
-            })*
+impl Ui {
+    /// The browser state of this window; both window types have one.
+    fn model(&self) -> BrowserModel<'_> {
+        match self {
+            Ui::Main(w) => w.global::<BrowserModel>(),
+            Ui::Side(w) => w.global::<BrowserModel>(),
         }
-    };
+    }
 }
-
-ui_setters!(
-    set_browser_error: SharedString,
-    set_browser_loading: bool,
-    set_browser_heading: SharedString,
-    set_browser_can_go_up: bool,
-    set_browser_at_sources: bool,
-    set_browser_items: ModelRc<BrowserItem>,
-    set_browser_resume_label: SharedString,
-);
 
 /// Connects a window's browser callbacks to `$browser`.
 macro_rules! wire_callbacks {
     ($window:expr, $browser:expr) => {{
-        let window = $window;
+        let model = $window.global::<BrowserModel>();
         let b = $browser.clone();
-        window.on_browser_activate(move |i| b.activate(i as usize));
+        model.on_activate(move |i| b.activate(i as usize));
         let b = $browser.clone();
-        window.on_browser_up(move || b.up());
+        model.on_up(move || b.up());
         let b = $browser.clone();
-        window.on_browser_remove(move |i| b.remove_source(i as usize));
+        model.on_remove(move |i| b.remove_source(i as usize));
         let b = $browser.clone();
-        window.on_browser_cycle_resume(move || b.cycle_resume());
+        model.on_cycle_resume(move || b.cycle_resume());
         let b = $browser.clone();
-        window.on_add_source(move |path| {
+        model.on_cycle_sort(move || b.cycle_sort());
+        let b = $browser.clone();
+        model.on_crumb(move |i| b.crumb(i as usize));
+        let b = $browser.clone();
+        model.on_primary_action(move || b.primary_action());
+        let b = $browser.clone();
+        model.on_retry(move || b.refresh());
+        let b = $browser.clone();
+        model.on_add_source(move |path| {
             if let Some(index) = b.add_local(path.trim()) {
                 b.navigate(Location::Folder {
                     source: index,
@@ -115,6 +107,12 @@ pub struct Browser {
     sources: RefCell<Vec<SourceSlot>>,
     location: RefCell<Location>,
     entries: RefCell<Vec<Entry>>,
+    sort: Cell<SortOrder>,
+    toast_timer: Timer,
+    /// An error from loading the sources at start, shown once the window is.
+    startup_error: RefCell<Option<String>>,
+    /// Index in `entries` of the file the primary action plays.
+    action: Cell<Option<usize>>,
     /// Bumped on every navigation so late results from an earlier listing
     /// are ignored.
     generation: RefCell<u64>,
@@ -130,6 +128,10 @@ impl Browser {
             sources: Default::default(),
             location: RefCell::new(Location::Sources),
             entries: Default::default(),
+            sort: Default::default(),
+            toast_timer: Timer::default(),
+            startup_error: Default::default(),
+            action: Default::default(),
             generation: Default::default(),
             on_play: Default::default(),
         });
@@ -138,6 +140,9 @@ impl Browser {
         wire_callbacks!(window, this);
 
         this.navigate(Location::Sources);
+        if let Some(err) = this.startup_error.take() {
+            this.show_error(&err);
+        }
         this
     }
 
@@ -209,7 +214,8 @@ impl Browser {
         let saved = match self.store.sources() {
             Ok(saved) => saved,
             Err(err) => {
-                self.show_error(&format!("Cannot load saved sources: {err}"));
+                *self.startup_error.borrow_mut() =
+                    Some(format!("Cannot load saved sources: {err}"));
                 return;
             }
         };
@@ -292,15 +298,20 @@ impl Browser {
             *g += 1;
             *g
         };
-        let Some(w) = self.ui() else {
+        self.action.set(None);
+        let Some(ui) = self.ui() else {
             return;
         };
-        w.set_browser_error(SharedString::new());
+        let w = ui.model();
+        w.set_error(SharedString::new());
+        w.set_action_text(SharedString::new());
+        w.set_summary(SharedString::new());
+        w.set_sort_label(self.sort.get().label().into());
         self.update_resume_label();
 
         match location {
             Location::Sources => {
-                w.set_browser_loading(false);
+                w.set_loading(false);
                 self.show_sources();
             }
             Location::Folder { source, path } => {
@@ -308,11 +319,13 @@ impl Browser {
                 let Some(slot) = sources.get(source) else {
                     return;
                 };
-                w.set_browser_heading(heading(&slot.source.source.display_name(), &path).into());
-                w.set_browser_can_go_up(true);
-                w.set_browser_at_sources(false);
-                w.set_browser_loading(true);
-                w.set_browser_items(ModelRc::default());
+                let crumbs = crumbs(&slot.source.source.display_name(), &path);
+                w.set_title(crumbs.last().cloned().unwrap_or_default());
+                w.set_crumbs(ModelRc::new(VecModel::from(crumbs)));
+                w.set_can_go_up(true);
+                w.set_at_sources(false);
+                w.set_loading(true);
+                w.set_items(ModelRc::default());
 
                 let src = slot.source.clone();
                 let id = src.id;
@@ -334,9 +347,10 @@ impl Browser {
     }
 
     fn show_sources(&self) {
-        let Some(w) = self.ui() else {
+        let Some(ui) = self.ui() else {
             return;
         };
+        let w = ui.model();
         let items: Vec<_> = self
             .sources
             .borrow()
@@ -344,15 +358,22 @@ impl Browser {
             .map(|s| BrowserItem {
                 label: s.source.source.display_name().into(),
                 detail: s.location.as_str().into(),
-                kind: KIND_SOURCE,
+                kind: ItemKind::Source,
+                badge: ItemBadge::None,
+                badge_text: SharedString::new(),
                 progress: -1.0,
-                watched: false,
             })
             .collect();
-        w.set_browser_heading("Sources".into());
-        w.set_browser_can_go_up(false);
-        w.set_browser_at_sources(true);
-        w.set_browser_items(ModelRc::new(VecModel::from(items)));
+        w.set_title("Sources".into());
+        w.set_crumbs(ModelRc::default());
+        w.set_summary(match items.len() {
+            0 => SharedString::new(),
+            1 => "1 source".into(),
+            n => format!("{n} sources").into(),
+        });
+        w.set_can_go_up(false);
+        w.set_at_sources(true);
+        w.set_items(ModelRc::new(VecModel::from(items)));
     }
 
     fn show_listing(
@@ -361,56 +382,104 @@ impl Browser {
         folder: &SourcePath,
         result: Result<Vec<Entry>, SourceError>,
     ) {
-        let Some(w) = self.ui() else {
+        let Some(ui) = self.ui() else {
             return;
         };
-        w.set_browser_loading(false);
-        let entries = match result {
+        let w = ui.model();
+        w.set_loading(false);
+        let mut entries = match result {
             Ok(entries) => entries,
             Err(err) => {
-                w.set_browser_error(format!("Cannot open this folder: {err}").into());
+                w.set_error(format!("Can't open this folder: {err}").into());
                 return;
             }
         };
+        let sort = self.sort.get();
+        entries.sort_by(|a, b| sort.compare(a, b));
         // Markers are a nice-to-have: show the listing even if this fails.
         let states = self.store.folder_states(source, folder).unwrap_or_default();
         let resume = self
             .store
             .playback_settings(source, folder)
             .map_or(true, |s| s.resume);
+        let view = FolderView::new(&entries, &states, resume);
         let items: Vec<_> = entries
             .iter()
-            .map(|e| {
-                let mut item = BrowserItem {
-                    label: e.name.as_str().into(),
-                    detail: SharedString::new(),
-                    kind: KIND_FOLDER,
-                    progress: -1.0,
-                    watched: false,
-                };
-                if e.kind == EntryKind::Video {
-                    item.kind = KIND_VIDEO;
-                    match marker(states.get(&e.path)) {
-                        Marker::Unwatched => {}
-                        Marker::Watched => {
-                            item.watched = true;
-                            item.detail = "Watched".into();
-                        }
-                        Marker::InProgress { position, fraction } => {
-                            item.progress = fraction.unwrap_or(0.0) as f32;
-                            item.detail = if resume {
-                                format!("Resume at {}", format_time(position)).into()
-                            } else {
-                                "In progress".into()
-                            };
-                        }
-                    }
+            .zip(&view.badges)
+            .map(|(e, badge)| {
+                let duration = states.get(&e.path).and_then(|s| s.duration);
+                BrowserItem {
+                    label: display_name(e).into(),
+                    detail: duration.map(format_minutes).unwrap_or_default().into(),
+                    kind: match e.kind {
+                        EntryKind::Folder => ItemKind::Folder,
+                        EntryKind::Video => ItemKind::Video,
+                    },
+                    badge: match badge {
+                        Badge::None => ItemBadge::None,
+                        Badge::Watched => ItemBadge::Watched,
+                        Badge::Resume { .. } => ItemBadge::Resume,
+                        Badge::New => ItemBadge::New,
+                    },
+                    badge_text: badge.label().into(),
+                    progress: match badge {
+                        Badge::Resume { fraction, .. } => fraction.unwrap_or(0.0) as f32,
+                        _ => -1.0,
+                    },
                 }
-                item
             })
             .collect();
+        w.set_summary(view.summary().into());
+        w.set_action_text(view.action_label(&entries).unwrap_or_default().into());
+        self.action.set(view.action.as_ref().map(|a| a.index()));
         *self.entries.borrow_mut() = entries;
-        w.set_browser_items(ModelRc::new(VecModel::from(items)));
+        w.set_items(ModelRc::new(VecModel::from(items)));
+    }
+
+    /// Plays the file behind the folder's primary action.
+    fn primary_action(self: &Rc<Self>) {
+        if let Some(index) = self.action.get() {
+            self.activate(index);
+        }
+    }
+
+    /// Goes to the folder at breadcrumb `index`: 0 is the source's root.
+    fn crumb(self: &Rc<Self>, index: usize) {
+        let location = self.location.borrow().clone();
+        if let Location::Folder { source, path } = location {
+            let mut target = SourcePath::root();
+            for segment in path.segments().take(index) {
+                match target.join(segment) {
+                    Ok(p) => target = p,
+                    Err(_) => return,
+                }
+            }
+            self.navigate(Location::Folder {
+                source,
+                path: target,
+            });
+        }
+    }
+
+    fn cycle_sort(self: &Rc<Self>) {
+        self.sort.set(self.sort.get().next());
+        if let Some(ui) = self.ui() {
+            ui.model().set_sort_label(self.sort.get().label().into());
+        }
+        self.rerender();
+    }
+
+    /// Shows the current listing again (re-sorted, new settings) without
+    /// listing the folder again, so the list doesn't blank or scroll back.
+    fn rerender(&self) {
+        let location = self.location.borrow().clone();
+        if let Location::Folder { source, path } = location {
+            let Some(id) = self.sources.borrow().get(source).map(|s| s.source.id) else {
+                return;
+            };
+            let entries = self.entries.borrow().clone();
+            self.show_listing(id, &path, Ok(entries));
+        }
     }
 
     /// Steps the resume setting of the current folder (inherit, off, on), or
@@ -436,16 +505,15 @@ impl Browser {
             self.show_error(&format!("Cannot save this setting: {err}"));
         }
         self.update_resume_label();
-        // "Resume at" markers depend on the setting.
-        if matches!(location, Location::Folder { .. }) {
-            self.refresh();
-        }
+        // The primary action depends on the setting.
+        self.rerender();
     }
 
     fn update_resume_label(&self) {
-        let Some(w) = self.ui() else {
+        let Some(ui) = self.ui() else {
             return;
         };
+        let w = ui.model();
         let on_off = |on: bool| if on { "On" } else { "Off" };
         let label = match &*self.location.borrow() {
             Location::Sources => {
@@ -470,13 +538,38 @@ impl Browser {
                 }
             }
         };
-        w.set_browser_resume_label(label.into());
+        w.set_resume_label(label.into());
     }
 
+    /// Shows `message` at the bottom for a few seconds, over whatever the
+    /// browser shows (a failed save, a file that won't play).
     pub fn show_error(&self, message: &str) {
-        if let Some(w) = self.ui() {
-            w.set_browser_error(message.into());
-        }
+        let Some(ui) = self.ui() else {
+            return;
+        };
+        ui.model().set_toast(message.into());
+        let view = self.view.borrow().clone();
+        let message = SharedString::from(message);
+        self.toast_timer
+            .start(TimerMode::SingleShot, TOAST_TIME, move || {
+                let clear = |m: BrowserModel<'_>| {
+                    if m.get_toast() == message {
+                        m.set_toast(SharedString::new());
+                    }
+                };
+                match &view {
+                    View::Main(w) => {
+                        if let Some(w) = w.upgrade() {
+                            clear(w.global::<BrowserModel>());
+                        }
+                    }
+                    View::Side(w) => {
+                        if let Some(w) = w.upgrade() {
+                            clear(w.global::<BrowserModel>());
+                        }
+                    }
+                }
+            });
     }
 }
 
@@ -501,12 +594,24 @@ fn normalize_location(path: &str) -> Option<String> {
     })
 }
 
-/// "Movies / Action / 2020" style heading for a folder in a source.
-fn heading(source_name: &str, path: &SourcePath) -> String {
+/// Breadcrumb segments for a folder: the source's name, then the folders.
+fn crumbs(source_name: &str, path: &SourcePath) -> Vec<SharedString> {
     std::iter::once(source_name)
         .chain(path.segments())
-        .collect::<Vec<_>>()
-        .join(" / ")
+        .map(SharedString::from)
+        .collect()
+}
+
+/// A video's name without its extension; folders keep theirs.
+fn display_name(entry: &Entry) -> &str {
+    match entry.kind {
+        EntryKind::Video => entry
+            .name
+            .rsplit_once('.')
+            .map_or(entry.name.as_str(), |(stem, _)| stem)
+            .trim(),
+        EntryKind::Folder => &entry.name,
+    }
 }
 
 #[cfg(test)]
@@ -535,9 +640,27 @@ mod tests {
     }
 
     #[test]
-    fn heading_joins_source_and_segments() {
-        assert_eq!(heading("Movies", &SourcePath::root()), "Movies");
+    fn crumbs_start_with_the_source() {
+        assert_eq!(crumbs("Movies", &SourcePath::root()), ["Movies"]);
         let p = SourcePath::parse("Action/2020").unwrap();
-        assert_eq!(heading("Movies", &p), "Movies / Action / 2020");
+        assert_eq!(crumbs("Movies", &p), ["Movies", "Action", "2020"]);
+    }
+
+    #[test]
+    fn video_names_drop_the_extension() {
+        let entry = |name: &str, kind| Entry {
+            name: name.into(),
+            path: SourcePath::parse(name).unwrap(),
+            kind,
+        };
+        assert_eq!(
+            display_name(&entry("E01 Low Water.mkv", EntryKind::Video)),
+            "E01 Low Water"
+        );
+        assert_eq!(display_name(&entry("noext", EntryKind::Video)), "noext");
+        assert_eq!(
+            display_name(&entry("Season 1.5", EntryKind::Folder)),
+            "Season 1.5"
+        );
     }
 }
