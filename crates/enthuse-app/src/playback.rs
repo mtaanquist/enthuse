@@ -230,7 +230,7 @@ impl Playback {
     }
 
     /// Shows or hides the controls, and moves subtitles above the bottom
-    /// controls while they show, so they are not covered.
+    /// controls while they show, so they are not covered. Outside PiP only.
     fn set_controls_visible(&self, w: &AppWindow, visible: bool) {
         w.global::<PlayerModel>().set_controls_visible(visible);
         let height = w
@@ -238,7 +238,8 @@ impl Playback {
             .size()
             .to_logical(w.window().scale_factor())
             .height;
-        let pos = if visible && height > 0.0 {
+        // PiP has no bottom controls to make room for.
+        let pos = if visible && height > 0.0 && !w.get_pip_active() {
             (100.0 - CONTROLS_HEIGHT / height * 100.0).clamp(50.0, 100.0)
         } else {
             100.0

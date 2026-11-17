@@ -22,7 +22,7 @@ use slint::{
 use crate::browser::{Browser, View};
 use crate::pip_geometry::{Edges, Rect, fit_aspect, resize};
 use crate::pointer;
-use crate::{AppWindow, BrowserModel, BrowserWindow, KeyFocus};
+use crate::{AppWindow, BrowserModel, BrowserWindow, KeyFocus, PlayerModel};
 
 /// PiP size when entering, in logical pixels; the video's ratio is fitted
 /// into it.
@@ -252,6 +252,9 @@ impl Pip {
         }
         self.browser.set_view(View::Main(m.as_weak()));
         let _ = self.side.hide();
+        // Show the player's controls, which also moves the subtitles above
+        // them again.
+        m.global::<PlayerModel>().invoke_activity();
     }
 
     /// Fits the PiP window to a new video's aspect ratio, never taller.

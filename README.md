@@ -17,7 +17,7 @@ Requires stable Rust (see `rust-toolchain.toml`) and libmpv.
 
 ## Picture-in-picture on Wayland
 
-Wayland does not let apps keep a window on top or place it, so the PiP player opens as a normal borderless window. On KDE Plasma you can keep it on top with a window rule: System Settings, Window Management, Window Rules, Add New. Set "Window title" to Exactly Match "Enthuse PiP" (the PiP window's title), then add the property "Keep above other windows", set to Force. On X11 and Windows PiP stays on top by itself.
+Wayland does not let apps keep a window on top or place it, so the PiP player opens as a normal borderless window. On KDE Plasma you can keep it on top with a window rule: System Settings, Window Management, Window Rules, Add New. Set "Window title" to Exactly Match "Enthuse PiP" (the PiP window's title), then add the property "Keep above other windows", set to Force. The window only gets that title when it turns into the PiP player, so whether the rule applies depends on KWin re-checking rules on a title change; treat this as best effort. On X11 and Windows PiP stays on top by itself.
 
 ## License
 
