@@ -25,6 +25,7 @@ const OBS_PAUSE: u64 = 3;
 const OBS_TRACK_COUNT: u64 = 4;
 const OBS_AID: u64 = 5;
 const OBS_SID: u64 = 6;
+const OBS_ASPECT: u64 = 7;
 
 /// Options applied before mpv starts. Callers can override them.
 const DEFAULT_OPTIONS: &[(&str, &str)] = &[
@@ -67,6 +68,7 @@ impl MpvPlayer {
         mpv.observe_property("track-list/count", Format::Int64, OBS_TRACK_COUNT)?;
         mpv.observe_property("aid", Format::String, OBS_AID)?;
         mpv.observe_property("sid", Format::String, OBS_SID)?;
+        mpv.observe_property("video-params/aspect", Format::Double, OBS_ASPECT)?;
 
         let wakeup: Arc<Mutex<Option<WakeupFn>>> = Arc::default();
         let slot = wakeup.clone();
@@ -127,6 +129,10 @@ fn translate(event: &Event<'_>) -> Option<PlayerEvent> {
             (OBS_DURATION, d) => Some(PlayerEvent::DurationChanged(as_seconds(d))),
             (OBS_PAUSE, PropertyData::Flag(p)) => Some(PlayerEvent::PauseChanged(*p)),
             (OBS_TRACK_COUNT | OBS_AID | OBS_SID, _) => Some(PlayerEvent::TracksChanged),
+            (OBS_ASPECT, PropertyData::Double(a)) if a.is_finite() && *a > 0.0 => {
+                Some(PlayerEvent::AspectChanged(Some(*a)))
+            }
+            (OBS_ASPECT, _) => Some(PlayerEvent::AspectChanged(None)),
             _ => None,
         },
         _ => None,
@@ -344,6 +350,14 @@ mod tests {
         assert_eq!(
             translate(&prop(OBS_SID, PropertyData::Str("2"))),
             Some(PlayerEvent::TracksChanged)
+        );
+        assert_eq!(
+            translate(&prop(OBS_ASPECT, PropertyData::Double(16.0 / 9.0))),
+            Some(PlayerEvent::AspectChanged(Some(16.0 / 9.0)))
+        );
+        assert_eq!(
+            translate(&prop(OBS_ASPECT, PropertyData::None)),
+            Some(PlayerEvent::AspectChanged(None))
         );
         assert_eq!(translate(&prop(99, PropertyData::Int64(1))), None);
         assert_eq!(translate(&Event::Seek), None);

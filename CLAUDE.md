@@ -23,7 +23,7 @@ See `docs/design.md` for the reasoning behind these choices, rejected options an
 - Sources go through the `Source` trait. `LocalFs` covers local folders, Linux mounts and Windows UNC paths. A built-in SMB source comes later.
 - Playlist and auto-next logic live in `enthuse-core`, not in libmpv's playlist, so behavior is the same for any backend.
 - Let the player draw subtitles. Do not render subtitles in the UI layer.
-- PiP turns the main window into a borderless, always-on-top, freely resizable mini player (not a second window: moving mpv's render context between windows stalls playback, see #52). Wayland cannot guarantee always-on-top or window placement; degrade gracefully.
+- PiP turns the video window into a borderless, always-on-top mini player that keeps the video's aspect ratio, and opens the browser in a second window in its place. The video never moves between windows: moving mpv's render context stalls playback (see #52). Wayland cannot guarantee always-on-top or window placement; degrade gracefully.
 - Keep the UI touch-friendly.
 - Branding: the name nods to Infuse on purpose, but the logo, icons, colors and visual style must stay clearly our own. Do not copy Infuse's assets, layouts or look.
 

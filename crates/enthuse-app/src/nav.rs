@@ -116,7 +116,8 @@ impl Nav {
             }
             Err(err) => {
                 self.show_browser();
-                w.set_browser_error(format!("Cannot play this file: {err}").into());
+                self.browser
+                    .show_error(&format!("Cannot play this file: {err}"));
             }
         }
     }
@@ -226,9 +227,8 @@ impl Nav {
                     Ok(None) => this.show_browser(),
                     Err(err) => {
                         this.show_browser();
-                        if let Some(w) = this.window.upgrade() {
-                            w.set_browser_error(format!("Cannot find the next file: {err}").into());
-                        }
+                        this.browser
+                            .show_error(&format!("Cannot find the next file: {err}"));
                     }
                 }
             },

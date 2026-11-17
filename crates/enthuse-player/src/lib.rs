@@ -124,6 +124,9 @@ pub enum PlayerEvent {
     PauseChanged(bool),
     /// The list of tracks or the selected tracks changed.
     TracksChanged,
+    /// Display aspect ratio (width / height) of the video, or `None` if
+    /// there is no video.
+    AspectChanged(Option<f64>),
 }
 
 /// Called from any thread when events are waiting. It must not call into

@@ -124,6 +124,7 @@ impl Playback {
             }
             PlayerEvent::PauseChanged(paused) => w.set_paused(*paused),
             PlayerEvent::TracksChanged => self.refresh_tracks(&w),
+            PlayerEvent::AspectChanged(a) => w.set_video_aspect(a.unwrap_or(0.0) as f32),
             // With a listener, auto-next takes over.
             PlayerEvent::Ended(EndReason::EndOfFile) => {
                 if self.listener.borrow().is_none() {
