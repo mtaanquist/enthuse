@@ -1,0 +1,721 @@
+// Folder browser screen (docs/ui.md, "Folder browser"). The state lives in
+// the BrowserModel global, which Rust fills for whichever window shows the
+// browser; the screen only displays it.
+
+import { ListView, ScrollView, LineEdit } from "std-widgets.slint";
+import { Theme, Icons, KeyFocus } from "theme.slint";
+import { ButtonVariant, IconButton, PillButton } from "components/buttons.slint";
+import { ButtonBehavior, FocusGrid } from "components/behavior.slint";
+import { SegmentedControl } from "components/segmented-control.slint";
+import { TipText } from "components/tip-text.slint";
+
+// Kinds and badges, kept in step with browser.rs.
+export enum ItemKind { source, folder, video }
+export enum ItemBadge { none, watched, resume, new }
+
+// A row in the folder browser.
+export struct BrowserItem {
+    label: string,
+    // Second line: a source's location, or a video's length when known.
+    detail: string,
+    kind: ItemKind,
+    badge: ItemBadge,
+    // "Watched", "31 min left", "New".
+    badge-text: string,
+    // Videos in progress: how far along (0..1), or -1.
+    progress: float,
+    // A frame grab (#68); empty until there is one.
+    thumbnail: image,
+}
+
+export global BrowserModel {
+    // Folder name, or "Sources" on the source list.
+    in property <string> title;
+    // Source name and the folders below it; the last one is the folder shown.
+    in property <[string]> crumbs;
+    in property <string> summary;
+    in property <bool> can-go-up;
+    in property <bool> at-sources: true;
+    in property <[BrowserItem]> items;
+    in property <bool> loading;
+    in property <string> error;
+    // A short message at the bottom, e.g. a failed save. Rust clears it.
+    in property <string> toast;
+    // Primary action ("Resume episode 5"), empty when there is none.
+    in property <string> action-text;
+    in property <string> resume-label;
+    in property <string> sort-label: "Sort: Name";
+    // 0 = list, 1 = grid.
+    in-out property <int> view-mode;
+
+    callback up();
+    callback activate(int);
+    callback remove(int);
+    callback add-source(string);
+    callback cycle-resume();
+    callback cycle-sort();
+    // Go to the folder at this breadcrumb index (0 = the source's root).
+    callback crumb(int);
+    callback primary-action();
+    callback retry();
+}
+
+// Path segments separated by "/". When too long, it is cut off on the left
+// so the current folder stays visible.
+component Breadcrumb inherits Rectangle {
+    in property <[string]> crumbs;
+    callback clicked(int);
+
+    // Shrinks first when the header is narrow.
+    min-width: 0px;
+    horizontal-stretch: 1;
+
+    clip: true;
+    height: Theme.touch-target;
+
+    row := HorizontalLayout {
+        x: min(0px, root.width - self.preferred-width);
+        width: self.preferred-width;
+        spacing: Theme.space-8;
+
+        for crumb[index] in root.crumbs: HorizontalLayout {
+            spacing: Theme.space-8;
+
+            if index > 0: Text {
+                text: "/";
+                color: Theme.text-faint;
+                font-size: Theme.label-size;
+                vertical-alignment: center;
+            }
+
+            Rectangle {
+                property <bool> last: index == root.crumbs.length - 1;
+                width: label.preferred-width;
+                accessible-role: button;
+                accessible-enabled: !self.last;
+                accessible-action-default => { root.clicked(index); }
+                accessible-label: crumb;
+                forward-focus: behavior;
+
+                label := Text {
+                    text: crumb;
+                    color: parent.last ? Theme.text : behavior.has-hover ? Theme.text : Theme.text-muted;
+                    font-size: Theme.label-size + 1px;
+                    font-weight: parent.last ? Theme.body-strong-weight : Theme.label-weight;
+                    vertical-alignment: center;
+                }
+
+                behavior := ButtonBehavior {
+                    enabled: !parent.last;
+                    ring-radius: 4px;
+                    clicked => { root.clicked(index); }
+                }
+            }
+        }
+    }
+}
+
+// Thumbnail: the frame grab when there is one, else an icon.
+export component Thumb inherits Rectangle {
+    in property <ItemKind> kind: ItemKind.video;
+    in property <image> picture;
+    in property <float> progress: -1;
+    in property <length> icon-size: Theme.icon-size;
+
+    border-radius: Theme.radius-small;
+    background: Theme.surface-raised;
+    clip: true;
+
+    if root.picture.width > 0: Image {
+        width: parent.width;
+        height: parent.height;
+        source: root.picture;
+        image-fit: cover;
+    }
+
+    if root.picture.width == 0: Image {
+        width: root.icon-size;
+        height: root.icon-size;
+        source: root.kind == ItemKind.source ? Icons.drive : root.kind == ItemKind.folder ? Icons.folder : Icons.video;
+        colorize: Theme.text-faint;
+    }
+
+    if root.progress >= 0: Rectangle {
+        y: parent.height - self.height;
+        height: 3px;
+        background: Theme.line-strong;
+
+        Rectangle {
+            x: 0;
+            width: parent.width * clamp(root.progress, 0, 1);
+            background: Theme.accent;
+        }
+    }
+}
+
+// Watched, resume and new markers on the right of a row.
+component StateBadge inherits HorizontalLayout {
+    in property <ItemBadge> badge;
+    in property <string> text;
+
+    spacing: Theme.space-12;
+    alignment: end;
+
+    if root.badge != ItemBadge.none: Text {
+        text: root.text;
+        color: root.badge == ItemBadge.resume ? Theme.accent : Theme.text-faint;
+        font-size: Theme.label-size;
+        font-weight: root.badge == ItemBadge.resume ? Theme.body-strong-weight : Theme.label-weight;
+        vertical-alignment: center;
+    }
+
+    if root.badge == ItemBadge.watched: Rectangle {
+        width: 24px;
+        height: 24px;
+        y: (parent.height - self.height) / 2;
+        border-radius: 12px;
+        background: Theme.line-strong;
+
+        Image {
+            width: 14px;
+            height: 14px;
+            source: Icons.check;
+            colorize: Theme.text;
+        }
+    }
+
+    if root.badge == ItemBadge.new: Rectangle {
+        width: 10px;
+        height: 10px;
+        y: (parent.height - self.height) / 2;
+        border-radius: 5px;
+        background: Theme.accent;
+    }
+}
+
+export component FileRow inherits Rectangle {
+    in property <BrowserItem> item;
+    in property <bool> removable;
+    callback clicked();
+    // See ButtonBehavior.arrow.
+    callback arrow(string) -> bool;
+    callback remove();
+
+    property <bool> dim: root.item.badge == ItemBadge.watched;
+    property <bool> highlight: root.item.badge == ItemBadge.resume;
+
+    height: 64px + Theme.space-8;
+    forward-focus: behavior;
+    accessible-role: button;
+    accessible-label: root.item.label + (root.item.badge-text != "" ? ", " + root.item.badge-text : "");
+    accessible-action-default => { root.clicked(); }
+
+    bg := Rectangle {
+        y: Theme.space-4;
+        height: parent.height - Theme.space-8;
+        border-radius: Theme.radius-medium;
+        background: behavior.pressed ? Theme.pressed(Theme.surface)
+            : (behavior.has-hover || remove.has-hover) ? (root.highlight ? Theme.surface-raised : Theme.surface)
+            : root.highlight ? Theme.surface : transparent;
+
+        animate background {
+            duration: behavior.pressed ? 0ms : Theme.hover-duration;
+        }
+
+        HorizontalLayout {
+            padding-left: Theme.space-12;
+            padding-right: Theme.space-16;
+            spacing: Theme.space-16;
+
+            Thumb {
+                width: 80px;
+                height: 45px;
+                y: (parent.height - self.height) / 2;
+                kind: root.item.kind;
+                picture: root.item.thumbnail;
+                progress: root.item.progress;
+            }
+
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+
+                TipText {
+                    text: root.item.label;
+                    hovered: behavior.has-hover;
+                    text-color: root.dim ? Theme.text-muted : Theme.text;
+                    font-size: Theme.body-size;
+                    font-weight: root.dim ? Theme.body-weight : Theme.body-strong-weight;
+                }
+
+                if root.item.detail != "": Text {
+                    text: root.item.detail;
+                    color: Theme.text-faint;
+                    font-size: Theme.meta-size;
+                    overflow: elide;
+                }
+            }
+
+            if root.item.kind == ItemKind.video: StateBadge {
+                width: 140px;
+                badge: root.item.badge;
+                text: root.item.badge-text;
+            }
+
+            if root.item.kind == ItemKind.folder: Image {
+                width: Theme.icon-size;
+                source: Icons.chevron-right;
+                colorize: Theme.text-faint;
+                image-fit: contain;
+            }
+
+            // Room for the remove button, which sits on top of the row.
+            if root.removable: Rectangle {
+                width: Theme.touch-target;
+            }
+        }
+    }
+
+    behavior := ButtonBehavior {
+        y: bg.y;
+        height: bg.height;
+        ring-radius: Theme.radius-medium;
+        clicked => { root.clicked(); }
+        arrow(k) => { return root.arrow(k); }
+    }
+
+    remove := IconButton {
+        x: parent.width - self.width - Theme.space-12;
+        y: (parent.height - self.height) / 2;
+        visible: root.removable;
+        enabled: root.removable;
+        icon: Icons.close;
+        label: "Remove source";
+        clicked => { root.remove(); }
+    }
+}
+
+// A list of FileRows, also used by Recent. Arrow keys move focus between
+// rows and scroll the focused row into view.
+export component FileList inherits ListView {
+    in property <[BrowserItem]> items;
+    in property <bool> removable;
+    callback activate(int);
+    callback remove(int);
+
+    property <length> row-height: 64px + Theme.space-8;
+    // The row to focus, asked for by bumping the serial. A row scrolled
+    // into view focuses itself when it is created.
+    property <int> focus-target: -1;
+    property <int> focus-serial;
+    property <bool> focus-pending;
+    property <int> first-serial: KeyFocus.first-serial;
+    changed first-serial => {
+        self.move-to(max(0, min(root.items.length - 1, ceil(-self.content-y / self.row-height))));
+    }
+
+    function move-to(target: int) {
+        if (target < 0) {
+            return;
+        }
+        if (target * self.row-height < -self.content-y) {
+            self.content-y = -target * self.row-height;
+        } else if ((target + 1) * self.row-height > -self.content-y + self.visible-height) {
+            self.content-y = -((target + 1) * self.row-height - self.visible-height);
+        }
+        self.focus-target = target;
+        self.focus-pending = true;
+        self.focus-serial += 1;
+    }
+
+    for item[index] in root.items: FileRow {
+        property <int> serial: root.focus-serial;
+        changed serial => {
+            if (index == root.focus-target) {
+                root.focus-pending = false;
+                self.focus();
+            }
+        }
+        init => {
+            if (root.focus-pending && index == root.focus-target) {
+                root.focus-pending = false;
+                self.focus();
+            }
+        }
+        arrow(k) => {
+            root.move-to(FocusGrid.target(index, root.items.length, 1, k));
+            return true;
+        }
+        item: item;
+        removable: root.removable;
+        clicked => { root.activate(index); }
+        remove => { root.remove(index); }
+    }
+}
+
+// Grid view card: 16:9 thumbnail with the same badges.
+component FileCard inherits Rectangle {
+    in property <BrowserItem> item;
+    callback clicked();
+    callback arrow(string) -> bool;
+
+    forward-focus: behavior;
+    accessible-role: button;
+    accessible-label: root.item.label + (root.item.badge-text != "" ? ", " + root.item.badge-text : "");
+    accessible-action-default => { root.clicked(); }
+
+    VerticalLayout {
+        spacing: Theme.space-8;
+
+        thumb := Thumb {
+            height: self.width * 9 / 16;
+            border-radius: Theme.radius-medium;
+            kind: root.item.kind;
+            picture: root.item.thumbnail;
+            progress: root.item.progress;
+            icon-size: Theme.icon-size-large + 6px;
+            border-width: behavior.has-hover ? 1px : 0px;
+            border-color: Theme.line-strong;
+
+            if root.item.badge == ItemBadge.watched: Rectangle {
+                x: parent.width - self.width - Theme.space-8;
+                y: Theme.space-8;
+                width: 24px;
+                height: 24px;
+                border-radius: 12px;
+                background: Theme.line-strong;
+
+                Image {
+                    width: 14px;
+                    height: 14px;
+                    source: Icons.check;
+                    colorize: Theme.text;
+                }
+            }
+
+            if root.item.badge == ItemBadge.new: Rectangle {
+                x: parent.width - self.width - Theme.space-12;
+                y: Theme.space-12;
+                width: 10px;
+                height: 10px;
+                border-radius: 5px;
+                background: Theme.accent;
+            }
+        }
+
+        TipText {
+            text: root.item.label;
+            hovered: behavior.has-hover;
+            text-color: root.item.badge == ItemBadge.watched ? Theme.text-muted : Theme.text;
+            font-size: Theme.body-size;
+            font-weight: Theme.body-strong-weight;
+        }
+
+        Text {
+            text: root.item.badge == ItemBadge.none || root.item.badge == ItemBadge.new ? root.item.detail : root.item.badge-text;
+            color: root.item.badge == ItemBadge.resume ? Theme.accent : Theme.text-faint;
+            font-size: Theme.meta-size;
+            overflow: elide;
+        }
+    }
+
+    behavior := ButtonBehavior {
+        ring-radius: Theme.radius-medium;
+        clicked => { root.clicked(); }
+        arrow(k) => { return root.arrow(k); }
+    }
+}
+
+// Message in place of the list: empty folder, or an error with Retry.
+component Notice inherits VerticalLayout {
+    in property <string> text;
+    in property <bool> error;
+    in property <bool> can-go-up;
+    callback retry();
+    callback back();
+
+    alignment: center;
+    spacing: Theme.space-20;
+
+    Text {
+        text: root.text;
+        color: root.error ? Theme.danger : Theme.text-muted;
+        font-size: Theme.body-size;
+        wrap: word-wrap;
+        horizontal-alignment: center;
+    }
+
+    HorizontalLayout {
+        alignment: center;
+        spacing: Theme.space-12;
+
+        if root.error: PillButton {
+            text: "Retry";
+            variant: ButtonVariant.primary;
+            clicked => { root.retry(); }
+        }
+
+        if root.can-go-up: PillButton {
+            text: "Back";
+            clicked => { root.back(); }
+        }
+    }
+}
+
+export component BrowserPage inherits Rectangle {
+    property <bool> adding;
+
+    // Placeholders show only when loading takes a while.
+    property <bool> slow-load;
+    property <bool> loading: BrowserModel.loading;
+    changed loading => { self.slow-load = false; }
+    Timer {
+        interval: 150ms;
+        running: BrowserModel.loading && !root.slow-load;
+        triggered => { root.slow-load = true; }
+    }
+
+    property <length> pad: root.width < 700px ? Theme.space-24 : Theme.content-padding-x;
+
+    VerticalLayout {
+        padding-left: root.pad;
+        padding-right: root.pad;
+        padding-top: BrowserModel.at-sources ? Theme.content-padding-top : Theme.space-24;
+        spacing: Theme.space-16;
+
+        // Header: back, breadcrumb, view and sort controls.
+        if !BrowserModel.at-sources: HorizontalLayout {
+            spacing: Theme.space-16;
+            height: Theme.touch-target;
+
+            if BrowserModel.can-go-up: IconButton {
+                icon: Icons.back;
+                label: "Back";
+                clicked => { BrowserModel.up(); }
+            }
+
+            Breadcrumb {
+                crumbs: BrowserModel.crumbs;
+                clicked(i) => { BrowserModel.crumb(i); }
+            }
+
+            SegmentedControl {
+                segments: [{ icon: Icons.list, label: "List" }, { icon: Icons.grid, label: "Grid" }];
+                selected <=> BrowserModel.view-mode;
+            }
+
+            PillButton {
+                text: BrowserModel.sort-label;
+                clicked => { BrowserModel.cycle-sort(); }
+            }
+
+            PillButton {
+                text: BrowserModel.resume-label;
+                clicked => { BrowserModel.cycle-resume(); }
+            }
+        }
+
+        // Title, summary and the primary action.
+        HorizontalLayout {
+            spacing: Theme.space-16;
+
+            VerticalLayout {
+                alignment: center;
+                spacing: Theme.space-4;
+
+                Text {
+                    text: BrowserModel.title;
+                    color: Theme.text;
+                    font-size: Theme.title-size;
+                    font-weight: Theme.title-weight;
+                    letter-spacing: Theme.title-letter-spacing;
+                    overflow: elide;
+                }
+
+                if BrowserModel.summary != "": Text {
+                    text: BrowserModel.summary;
+                    color: Theme.text-muted;
+                    font-size: Theme.body-size;
+                    font-weight: Theme.body-weight;
+                    overflow: elide;
+                }
+            }
+
+            if BrowserModel.action-text != "" && !BrowserModel.loading: PillButton {
+                y: (parent.height - self.height) / 2;
+                size: 48px;
+                variant: ButtonVariant.primary;
+                icon: Icons.play;
+                text: BrowserModel.action-text;
+                clicked => { BrowserModel.primary-action(); }
+            }
+
+            // The default resume setting, until Settings exists (#69).
+            if BrowserModel.at-sources: PillButton {
+                y: (parent.height - self.height) / 2;
+                text: BrowserModel.resume-label;
+                clicked => { BrowserModel.cycle-resume(); }
+            }
+
+            if BrowserModel.at-sources: PillButton {
+                y: (parent.height - self.height) / 2;
+                variant: root.adding ? ButtonVariant.outline : ButtonVariant.primary;
+                icon: root.adding ? Icons.close : Icons.add;
+                text: root.adding ? "Cancel" : "Add source";
+                clicked => { root.adding = !root.adding; }
+            }
+        }
+
+        if root.adding && BrowserModel.at-sources: HorizontalLayout {
+            spacing: Theme.space-12;
+
+            path := LineEdit {
+                height: Theme.touch-target;
+                font-size: Theme.body-size;
+                placeholder-text: "Folder path, mount or \\\\server\\share";
+                init => { self.focus(); }
+                accepted(text) => {
+                    if (text != "") {
+                        BrowserModel.add-source(text);
+                        self.text = "";
+                        root.adding = false;
+                    }
+                }
+            }
+
+            PillButton {
+                variant: ButtonVariant.primary;
+                text: "Open";
+                clicked => {
+                    if (path.text != "") {
+                        BrowserModel.add-source(path.text);
+                        path.text = "";
+                        root.adding = false;
+                    }
+                }
+            }
+        }
+
+        // The listing, or placeholders, or a message.
+        Rectangle {
+            vertical-stretch: 1;
+
+            if BrowserModel.loading && root.slow-load: VerticalLayout {
+                alignment: start;
+                for i in 6: Rectangle {
+                    height: 64px + Theme.space-8;
+
+                    Rectangle {
+                        y: Theme.space-4;
+                        height: 64px;
+                        border-radius: Theme.radius-medium;
+                        background: Theme.surface;
+                    }
+                }
+            }
+
+            if !BrowserModel.loading && BrowserModel.error != "": Notice {
+                text: BrowserModel.error;
+                error: true;
+                can-go-up: BrowserModel.can-go-up;
+                retry => { BrowserModel.retry(); }
+                back => { BrowserModel.up(); }
+            }
+
+            if !BrowserModel.loading && BrowserModel.error == "" && BrowserModel.items.length == 0: Notice {
+                text: BrowserModel.at-sources ? "Add a folder or network share to get started." : "No videos in this folder";
+                can-go-up: BrowserModel.can-go-up;
+                back => { BrowserModel.up(); }
+            }
+
+            if !BrowserModel.loading && BrowserModel.error == "" && BrowserModel.items.length > 0 && (BrowserModel.view-mode == 0 || BrowserModel.at-sources): FileList {
+                items: BrowserModel.items;
+                removable: BrowserModel.at-sources;
+                activate(i) => { BrowserModel.activate(i); }
+                remove(i) => { BrowserModel.remove(i); }
+            }
+
+            if !BrowserModel.loading && BrowserModel.error == "" && BrowserModel.items.length > 0 && BrowserModel.view-mode == 1 && !BrowserModel.at-sources: grid := ScrollView {
+                property <length> gap: Theme.space-20;
+                // Leave room on the right for the overlay scrollbar.
+                property <length> usable: self.visible-width - Theme.space-16;
+                property <int> columns: max(1, floor((self.usable + self.gap) / (200px + self.gap)));
+                property <length> card-width: (self.usable - (self.columns - 1) * self.gap) / self.columns;
+
+                content-width: self.visible-width;
+                // Thumbnail plus two lines of text.
+                property <length> card-height: self.card-width * 9 / 16 + 64px;
+
+                content-height: ceil(BrowserModel.items.length / self.columns) * (self.card-height + self.gap);
+
+                // Arrow keys, as in the list.
+                property <int> focus-target: -1;
+                property <int> focus-serial;
+                property <int> first-serial: KeyFocus.first-serial;
+                changed first-serial => {
+                    self.move-to(max(0, min(BrowserModel.items.length - 1, self.columns * ceil(-self.content-y / (self.card-height + self.gap)))));
+                }
+
+                function move-to(target: int) {
+                    if (target < 0) {
+                        return;
+                    }
+                    if (floor(target / self.columns) * (self.card-height + self.gap) < -self.content-y) {
+                        self.content-y = -floor(target / self.columns) * (self.card-height + self.gap);
+                    } else if (floor(target / self.columns) * (self.card-height + self.gap) + self.card-height > -self.content-y + self.visible-height) {
+                        self.content-y = -(floor(target / self.columns) * (self.card-height + self.gap) + self.card-height - self.visible-height);
+                    }
+                    self.focus-target = target;
+                    self.focus-serial += 1;
+                }
+
+                for item[index] in BrowserModel.items: FileCard {
+                    property <int> serial: grid.focus-serial;
+                    changed serial => {
+                        if (index == grid.focus-target) {
+                            self.focus();
+                        }
+                    }
+                    arrow(k) => {
+                        grid.move-to(FocusGrid.target(index, BrowserModel.items.length, grid.columns, k));
+                        return true;
+                    }
+                    x: mod(index, grid.columns) * (grid.card-width + grid.gap);
+                    y: floor(index / grid.columns) * (grid.card-height + grid.gap);
+                    width: grid.card-width;
+                    height: grid.card-height;
+                    item: item;
+                    clicked => { BrowserModel.activate(index); }
+                }
+            }
+        }
+    }
+}
+
+// Short message at the bottom of the app screens, e.g. "Cannot play this
+// file". Shown in every section, so errors raised from Home are seen too.
+export component Toast inherits Rectangle {
+    if BrowserModel.toast != "": Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: parent.height - self.height - Theme.space-24;
+        width: min(parent.width - 2 * Theme.space-24, toast-text.preferred-width + 2 * Theme.space-20);
+        height: max(Theme.touch-target, toast-text.preferred-height + 2 * Theme.space-12);
+        border-radius: Theme.radius-overlay;
+        background: Theme.overlay-card;
+        border-width: 1px;
+        border-color: Theme.line-strong;
+        drop-shadow-blur: 24px;
+        drop-shadow-color: rgba(0, 0, 0, 0.45);
+        accessible-role: text;
+        accessible-label: BrowserModel.toast;
+
+        toast-text := Text {
+            width: parent.width - 2 * Theme.space-20;
+            text: BrowserModel.toast;
+            color: Theme.text;
+            font-size: Theme.label-size;
+            wrap: word-wrap;
+            horizontal-alignment: center;
+        }
+    }
+}

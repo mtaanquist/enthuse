@@ -1,0 +1,60 @@
+// An entry in the side navigation. `compact` shows the icon only, for the
+// narrow icon rail.
+
+import { Theme } from "../theme.slint";
+import { ButtonBehavior } from "behavior.slint";
+
+export component NavItem inherits Rectangle {
+    in property <image> icon;
+    in property <string> text;
+    in property <bool> active;
+    in property <bool> compact;
+    callback clicked();
+    // See ButtonBehavior.arrow.
+    callback arrow(string) -> bool;
+
+    height: Theme.nav-item-height;
+    border-radius: Theme.radius-medium;
+    background: root.active ? Theme.surface-raised : behavior.pressed ? Theme.pressed(Theme.surface) : behavior.has-hover ? Theme.surface : transparent;
+    forward-focus: behavior;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    animate background {
+        duration: behavior.pressed ? 0ms : Theme.hover-duration;
+    }
+
+    HorizontalLayout {
+        padding-left: root.compact ? 0px : Theme.space-16;
+        padding-right: root.compact ? 0px : Theme.space-16;
+        spacing: Theme.space-16;
+        alignment: root.compact ? center : start;
+
+        Image {
+            width: Theme.icon-size;
+            source: root.icon;
+            colorize: root.active ? Theme.text : Theme.text-muted;
+            image-fit: contain;
+        }
+
+        if !root.compact: Text {
+            text: root.text;
+            color: root.active ? Theme.text : Theme.text-muted;
+            font-size: Theme.body-size;
+            font-weight: root.active ? Theme.body-strong-weight : Theme.body-weight;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+
+    behavior := ButtonBehavior {
+        ring-radius: root.border-radius;
+        arrow(k) => { return root.arrow(k); }
+        clicked => {
+            root.clicked();
+        }
+    }
+}

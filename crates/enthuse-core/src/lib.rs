@@ -4,11 +4,17 @@
 //! This crate has no UI or libmpv dependency so that all of its logic can be
 //! unit tested on any platform.
 
+pub mod controls;
+pub mod folder;
 pub mod natsort;
 pub mod next;
 pub mod paths;
+pub mod recent;
 pub mod resume;
 pub mod settings;
 pub mod source;
 pub mod storage;
+pub mod thumbs;
 pub mod time;
+pub mod up_next;
+pub mod watched;

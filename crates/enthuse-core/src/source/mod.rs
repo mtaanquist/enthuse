@@ -29,6 +29,12 @@ pub fn is_video_file(name: &str) -> bool {
     })
 }
 
+/// Whether a source location is a network share: a UNC path
+/// (`\\server\share`, or `//server/share`) or an `smb://` URL.
+pub fn is_network_location(location: &str) -> bool {
+    location.starts_with(r"\\") || location.starts_with("//") || location.starts_with("smb://")
+}
+
 /// What a directory entry is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EntryKind {
@@ -56,6 +62,14 @@ pub fn entry_order(a: &Entry, b: &Entry) -> Ordering {
     rank(a)
         .cmp(&rank(b))
         .then_with(|| natural_cmp(&a.name, &b.name))
+}
+
+/// Size and modification time of a file, to tell when it changed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct FileStamp {
+    pub size: u64,
+    /// Seconds since the Unix epoch.
+    pub modified: u64,
 }
 
 /// Why a source operation failed.
@@ -105,11 +119,26 @@ pub trait Source: Send + Sync {
 
     /// What to hand to the player to open `file`: a local path or a URL.
     fn playable(&self, file: &SourcePath) -> Result<String, SourceError>;
+
+    /// Size and modification time of `file`, when the source knows them.
+    /// Can be slow on network shares, like listing.
+    fn stamp(&self, _file: &SourcePath) -> Option<FileStamp> {
+        None
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unc_paths_are_network_shares() {
+        assert!(is_network_location(r"\\nas\media"));
+        assert!(is_network_location("//nas/media"));
+        assert!(is_network_location("smb://nas/media"));
+        assert!(!is_network_location(r"D:\Movies"));
+        assert!(!is_network_location("/mnt/media"));
+    }
 
     #[test]
     fn video_extension_detection() {

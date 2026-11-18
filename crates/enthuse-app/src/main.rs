@@ -6,12 +6,16 @@
 
 mod bg;
 mod browser;
+mod home;
 mod nav;
 mod pip;
 mod pip_geometry;
 mod playback;
 mod pointer;
+mod recent;
 mod selftest;
+mod settings;
+mod thumbs;
 mod video;
 
 use std::path::Path;
@@ -61,6 +65,12 @@ fn run(
     slint::BackendSelector::new()
         .backend_name("winit".into())
         .renderer_name("femtovg".into())
+        // Dark native title bar to match the UI (docs/ui.md, "Window
+        // chrome"). Windows honors it; on Linux it is a hint to the
+        // window manager or the client-side decorations.
+        .with_winit_window_attributes_hook(|attributes| {
+            attributes.with_theme(Some(slint::winit_030::winit::window::Theme::Dark))
+        })
         .select()?;
 
     let options: &[(&str, &str)] = if self_test {
@@ -85,18 +95,50 @@ fn run(
 
     let store = Rc::new(open_store(self_test));
     let window = AppWindow::new()?;
+    {
+        let weak = window.as_weak();
+        window.global::<KeyFocus>().on_restore(move || {
+            if let Some(w) = weak.upgrade() {
+                w.invoke_focus_keys();
+            }
+        });
+    }
     let playback = playback::Playback::new(&window, player.clone());
     let browser = browser::Browser::new(&window, store.clone());
     for folder in folders {
         browser.add_local(folder);
     }
+    let home = home::Home::new(&window, store.clone(), browser.clone());
     let nav = nav::Nav::new(
         &window,
         player.clone(),
         playback.clone(),
         browser.clone(),
-        store,
+        store.clone(),
     );
+    home.set_nav(&nav);
+    let recent = recent::Recent::new(&window, store.clone(), browser.clone());
+    recent.set_nav(&nav);
+    let settings = settings::Settings::new(&window, store.clone(), browser.clone());
+    {
+        let nav = nav.clone();
+        settings.on_change(move || nav.reload_settings());
+    }
+    // No thumbnails in the self-test, which has no real files and must not
+    // write to the user's cache.
+    let thumb_dir = (!self_test)
+        .then(AppDirs::from_system)
+        .flatten()
+        .map(|dirs| dirs.thumbnail_dir());
+    let thumbs = thumbs::Thumbs::new(store.clone(), thumb_dir);
+    browser.set_thumbs(&thumbs);
+    home.set_thumbs(&thumbs);
+    nav.set_thumbs(&thumbs);
+    recent.set_thumbs(&thumbs);
+    {
+        let thumbs = thumbs.clone();
+        settings.on_change(move || thumbs.settings_changed());
+    }
 
     let capture = video::ScreenCapture::default();
     // mpv needs the render context before a file is loaded, and the render
@@ -111,19 +153,27 @@ fn run(
         });
         let output = video::VideoOutput::new(player.clone(), move || {
             if let Some((url, title)) = start {
-                playback.open(&url, &title, None);
+                // An error shows on the player's overlay.
+                let _ = playback.open(&url, &title, None);
             }
         });
         output.attach(&window, Some(capture.clone()))?;
     }
-    let pip = pip::Pip::new(&window, browser.clone())?;
+    let pip = pip::Pip::new(&window, browser.clone(), player.clone())?;
     playback.attach_side(pip.side());
+    home.attach_side(pip.side());
+    settings.attach_side(pip.side());
+    recent.attach_side(pip.side());
     {
-        let pip = pip.clone();
-        nav.set_on_leave_player(Box::new(move || pip.exit()));
+        let (pip, playback) = (pip.clone(), playback.clone());
+        nav.set_on_leave_player(Box::new(move || {
+            pip.exit();
+            playback.leave_fullscreen();
+        }));
     }
 
     let outcome = if self_test {
+        playback.disable_auto_hide();
         selftest::start(&window, player.clone(), capture)
     } else {
         Default::default()

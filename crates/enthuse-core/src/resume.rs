@@ -2,7 +2,8 @@
 //! position, and which marker the browser shows. Pure logic; the app does
 //! the storing.
 
-use crate::storage::{WatchState, reaches_threshold};
+use crate::storage::WatchState;
+use crate::watched::{WatchedRule, reaches_threshold};
 
 /// How far playback must move (in seconds) before the position is saved
 /// again. Pausing, stopping and leaving the file save regardless.
@@ -12,13 +13,13 @@ pub const SAVE_INTERVAL_SECS: f64 = 10.0;
 pub const MIN_RESUME_SECS: f64 = 5.0;
 
 /// Where to start playing a file with saved state `state`: the saved
-/// position, unless it is barely started or past the watched `threshold`,
+/// position, unless it is barely started or already meets the watched `rule`,
 /// in which case the beginning (`None`). A watched file that was started
 /// again resumes too; marking a file watched clears its position.
-pub fn start_position(state: Option<&WatchState>, threshold: f64) -> Option<f64> {
+pub fn start_position(state: Option<&WatchState>, rule: &WatchedRule) -> Option<f64> {
     let state = state?;
     let position = state.position.filter(|p| *p >= MIN_RESUME_SECS)?;
-    if reaches_threshold(position, state.duration, threshold) {
+    if reaches_threshold(position, state.duration, rule) {
         return None;
     }
     Some(position)
@@ -98,8 +99,9 @@ mod tests {
 
     #[test]
     fn resume_decisions() {
-        let start = |s: WatchState| start_position(Some(&s), 0.9);
-        assert_eq!(start_position(None, 0.9), None);
+        let rule = WatchedRule::percent(0.9);
+        let start = |s: WatchState| start_position(Some(&s), &rule);
+        assert_eq!(start_position(None, &rule), None);
         assert_eq!(start(state(Some(600.0), Some(1200.0), false)), Some(600.0));
         // Watched but started again: resume that.
         assert_eq!(start(state(Some(600.0), Some(1200.0), true)), Some(600.0));

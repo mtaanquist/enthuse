@@ -16,9 +16,36 @@ pub fn format_time(seconds: f64) -> String {
     }
 }
 
+/// Formats a length for labels, rounded to whole minutes: `44 min`,
+/// `1 h 12 min`, `2 h`. Anything under a minute but above zero shows as
+/// `1 min`, so a label never says `0 min` while time is left.
+pub fn format_minutes(seconds: f64) -> String {
+    let minutes = if seconds.is_finite() && seconds > 0.0 {
+        ((seconds / 60.0).round() as u64).max(1)
+    } else {
+        0
+    };
+    let (h, m) = (minutes / 60, minutes % 60);
+    match (h, m) {
+        (0, m) => format!("{m} min"),
+        (h, 0) => format!("{h} h"),
+        (h, m) => format!("{h} h {m} min"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::format_time;
+    use super::{format_minutes, format_time};
+
+    #[test]
+    fn formats_minutes() {
+        assert_eq!(format_minutes(0.0), "0 min");
+        assert_eq!(format_minutes(f64::NAN), "0 min");
+        assert_eq!(format_minutes(10.0), "1 min");
+        assert_eq!(format_minutes(44.0 * 60.0 + 20.0), "44 min");
+        assert_eq!(format_minutes(3600.0), "1 h");
+        assert_eq!(format_minutes(72.0 * 60.0), "1 h 12 min");
+    }
 
     #[test]
     fn formats() {

@@ -1,0 +1,491 @@
+// Settings screen (#69): playback, folder overrides, thumbnails, about.
+// Rust fills SettingsModel for each window and saves every change at once;
+// the screen only displays it.
+
+import { ScrollView } from "std-widgets.slint";
+import { Theme, Icons } from "theme.slint";
+import { ButtonVariant, IconButton, PillButton } from "components/buttons.slint";
+import { ButtonBehavior } from "components/behavior.slint";
+
+// A folder with its own settings.
+export struct OverrideItem {
+    // Folder name, or the source's name for its top folder.
+    folder: string,
+    // "NAS / Shows / Kids, resume off"
+    detail: string,
+}
+
+export global SettingsModel {
+    in property <bool> resume: true;
+    in property <bool> auto-next: true;
+    in property <bool> network-thumbnails: true;
+    // 0 percentage, 1 time left, 2 whichever comes first.
+    in property <int> watched-mode;
+    in property <string> watched-percent: "90%";
+    in property <string> watched-remaining: "2 min";
+    in property <string> watched-summary;
+    // Whether the steppers can still go down or up.
+    in property <bool> percent-down: true;
+    in property <bool> percent-up: true;
+    in property <bool> remaining-down: true;
+    in property <bool> remaining-up: true;
+    in property <[OverrideItem]> overrides;
+    in property <string> version;
+
+    callback set-resume(bool);
+    callback set-auto-next(bool);
+    callback set-network-thumbnails(bool);
+    callback set-watched-mode(int);
+    // -1 or 1.
+    callback step-percent(int);
+    callback step-remaining(int);
+    callback clear-override(int);
+    // Asks Rust to load everything again, e.g. when the screen shows.
+    callback refresh();
+}
+
+component SectionHeading inherits Text {
+    color: Theme.text-secondary;
+    font-size: Theme.section-size;
+    font-weight: Theme.section-weight;
+    vertical-alignment: center;
+}
+
+// An on/off switch. The whole row is the tap target (see SwitchRow); this
+// is the drawing.
+component Switch inherits Rectangle {
+    in property <bool> on;
+    in property <bool> hover;
+
+    width: 48px;
+    height: 28px;
+    border-radius: self.height / 2;
+    background: root.on ? (root.hover ? Theme.hovered(Theme.accent) : Theme.accent) : (root.hover ? Theme.line-strong.brighter(0.2) : Theme.line-strong);
+
+    animate background {
+        duration: Theme.hover-duration;
+    }
+
+    Rectangle {
+        x: root.on ? parent.width - self.width - 4px : 4px;
+        width: 20px;
+        height: 20px;
+        border-radius: self.height / 2;
+        background: root.on ? Theme.on-accent : Theme.text-muted;
+
+        animate x {
+            duration: Theme.hover-duration;
+        }
+    }
+}
+
+// Title, an optional description, and a control on the right.
+component RowText inherits VerticalLayout {
+    in property <string> title;
+    in property <string> description;
+
+    alignment: center;
+    spacing: Theme.space-4;
+
+    Text {
+        text: root.title;
+        color: Theme.text;
+        font-size: Theme.body-size;
+        font-weight: Theme.body-weight;
+        wrap: word-wrap;
+    }
+
+    if root.description != "": Text {
+        text: root.description;
+        color: Theme.text-muted;
+        font-size: Theme.meta-size;
+        wrap: word-wrap;
+    }
+}
+
+// A setting that is on or off. Tapping anywhere on the row flips it.
+component SwitchRow inherits Rectangle {
+    in property <string> title;
+    in property <string> description;
+    in property <bool> on;
+    callback toggled(bool);
+
+    min-height: 64px;
+    background: behavior.has-hover ? Theme.surface-raised : transparent;
+    forward-focus: behavior;
+    accessible-role: switch;
+    accessible-label: root.title;
+    accessible-description: root.description;
+    accessible-checkable: true;
+    accessible-checked: root.on;
+    accessible-action-default => { root.toggled(!root.on); }
+
+    animate background {
+        duration: Theme.hover-duration;
+    }
+
+    HorizontalLayout {
+        padding-left: Theme.space-20;
+        padding-right: Theme.space-20;
+        padding-top: Theme.space-12;
+        padding-bottom: Theme.space-12;
+        spacing: Theme.space-16;
+
+        RowText {
+            title: root.title;
+            description: root.description;
+        }
+
+        VerticalLayout {
+            alignment: center;
+
+            Switch {
+                on: root.on;
+                hover: behavior.has-hover;
+            }
+        }
+    }
+
+    // Keyboard focus, drawn inside the row: the card clips anything outside.
+    if behavior.keyboard-focus: Rectangle {
+        border-width: Theme.focus-ring-width;
+        border-color: Theme.accent;
+        border-radius: Theme.radius-small;
+    }
+
+    behavior := ButtonBehavior {
+        ring-radius: 0;
+        show-ring: false;
+        keep-focus: true;
+        clicked => { root.toggled(!root.on); }
+    }
+}
+
+// Text segments with one selected.
+component TextSegments inherits Rectangle {
+    in property <[string]> segments;
+    in property <int> selected;
+    callback select(int);
+
+    // Each segment is a full touch target inside the 3px padding.
+    height: Theme.touch-target + 6px;
+    border-radius: self.height / 2;
+    border-width: 1px;
+    border-color: Theme.line;
+
+    HorizontalLayout {
+        padding: 3px;
+        spacing: 2px;
+
+        for segment[index] in root.segments: Rectangle {
+            property <bool> active: index == root.selected;
+
+            horizontal-stretch: 1;
+            min-width: label.preferred-width + 2 * Theme.space-16;
+            border-radius: self.height / 2;
+            background: self.active ? Theme.line-strong : behavior.pressed ? Theme.pressed(Theme.surface) : behavior.has-hover ? Theme.surface : transparent;
+            forward-focus: behavior;
+            accessible-role: button;
+            accessible-label: segment;
+            accessible-checkable: true;
+            accessible-checked: self.active;
+            accessible-action-default => { root.select(index); }
+
+            animate background {
+                duration: Theme.hover-duration;
+            }
+
+            label := Text {
+                text: segment;
+                color: parent.active ? Theme.text : Theme.text-muted;
+                font-size: Theme.label-size;
+                font-weight: Theme.label-weight;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+            }
+
+            behavior := ButtonBehavior {
+                ring-radius: parent.border-radius;
+                keep-focus: true;
+                clicked => { root.select(index); }
+            }
+        }
+    }
+}
+
+// Minus, the value, plus.
+component Stepper inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> value;
+    in property <bool> can-down: true;
+    in property <bool> can-up: true;
+    callback step(int);
+
+    spacing: Theme.space-8;
+    alignment: end;
+
+    IconButton {
+        icon: Icons.minus;
+        label: "Less " + root.label;
+        enabled: root.can-down;
+        keep-focus: true;
+        clicked => { root.step(-1); }
+    }
+
+    Text {
+        width: 72px;
+        text: root.value;
+        color: Theme.text;
+        font-size: Theme.body-size;
+        font-weight: Theme.body-strong-weight;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        accessible-role: text;
+        accessible-label: root.label + ": " + root.value;
+    }
+
+    IconButton {
+        icon: Icons.add;
+        label: "More " + root.label;
+        enabled: root.can-up;
+        keep-focus: true;
+        clicked => { root.step(1); }
+    }
+}
+
+// A row with a title on the left and a stepper on the right.
+component StepperRow inherits HorizontalLayout {
+    in property <string> title;
+    in property <string> value;
+    in property <bool> can-down;
+    in property <bool> can-up;
+    callback step(int);
+
+    padding-left: Theme.space-20;
+    padding-right: Theme.space-20;
+    padding-top: Theme.space-8;
+    padding-bottom: Theme.space-8;
+    spacing: Theme.space-16;
+
+    RowText {
+        title: root.title;
+    }
+
+    Stepper {
+        label: root.title;
+        value: root.value;
+        can-down: root.can-down;
+        can-up: root.can-up;
+        step(d) => { root.step(d); }
+    }
+}
+
+component Divider inherits Rectangle {
+    height: 1px;
+    background: Theme.line;
+}
+
+// A rounded group of rows.
+component Card inherits Rectangle {
+    border-radius: Theme.radius-large;
+    border-width: 1px;
+    border-color: Theme.line;
+    background: Theme.surface;
+    clip: true;
+
+    VerticalLayout {
+        @children
+    }
+}
+
+component SettingsSection inherits VerticalLayout {
+    in property <string> title;
+
+    spacing: Theme.space-16;
+
+    SectionHeading {
+        text: root.title;
+    }
+
+    Card {
+        @children
+    }
+}
+
+export component SettingsPage inherits Rectangle {
+    property <length> pad: root.width < 700px ? Theme.space-24 : Theme.content-padding-x;
+    property <bool> narrow: root.width < 640px;
+
+    scroll := ScrollView {
+        content-width: self.visible-width;
+        content-height: page.preferred-height;
+
+        page := VerticalLayout {
+            x: 0;
+            // Readable line lengths on wide windows.
+            width: min(parent.visible-width, 820px + 2 * root.pad);
+            padding-left: root.pad;
+            padding-right: root.pad;
+            padding-top: Theme.content-padding-top;
+            padding-bottom: Theme.space-48;
+            spacing: Theme.space-36;
+
+            Text {
+                text: "Settings";
+                color: Theme.text;
+                font-size: Theme.title-size;
+                font-weight: Theme.title-weight;
+                letter-spacing: Theme.title-letter-spacing;
+            }
+
+            SettingsSection {
+                title: "Playback";
+
+                SwitchRow {
+                    title: "Resume where you left off";
+                    description: "Folders can have their own setting, from the Resume button in Browse.";
+                    on: SettingsModel.resume;
+                    toggled(on) => { SettingsModel.set-resume(on); }
+                }
+
+                Divider { }
+
+                SwitchRow {
+                    title: "Play the next file automatically";
+                    description: "When a file ends, the next one in its folder starts, with an Up next card first.";
+                    on: SettingsModel.auto-next;
+                    toggled(on) => { SettingsModel.set-auto-next(on); }
+                }
+
+                Divider { }
+
+                VerticalLayout {
+                    padding-top: Theme.space-12;
+                    padding-bottom: Theme.space-8;
+                    spacing: Theme.space-12;
+
+                    HorizontalLayout {
+                        padding-left: Theme.space-20;
+                        padding-right: Theme.space-20;
+
+                        RowText {
+                            title: "Mark as watched";
+                            description: SettingsModel.watched-summary + (SettingsModel.watched-mode != 0 ? ". Time left waits until at most a quarter of the file is left" : "") + ". Playing to the end always counts.";
+                        }
+                    }
+
+                    HorizontalLayout {
+                        padding-left: Theme.space-20;
+                        padding-right: Theme.space-20;
+                        alignment: root.narrow ? stretch : start;
+
+                        TextSegments {
+                            segments: root.narrow ? ["Percent", "Time left", "First of"] : ["Percentage", "Time left", "Whichever first"];
+                            selected: SettingsModel.watched-mode;
+                            select(i) => { SettingsModel.set-watched-mode(i); }
+                        }
+                    }
+
+                    if SettingsModel.watched-mode != 1: StepperRow {
+                        title: "Played";
+                        value: SettingsModel.watched-percent;
+                        can-down: SettingsModel.percent-down;
+                        can-up: SettingsModel.percent-up;
+                        step(d) => { SettingsModel.step-percent(d); }
+                    }
+
+                    if SettingsModel.watched-mode != 0: StepperRow {
+                        title: "Time left";
+                        value: SettingsModel.watched-remaining;
+                        can-down: SettingsModel.remaining-down;
+                        can-up: SettingsModel.remaining-up;
+                        step(d) => { SettingsModel.step-remaining(d); }
+                    }
+                }
+            }
+
+            SettingsSection {
+                title: "Folder settings";
+
+                if SettingsModel.overrides.length == 0: HorizontalLayout {
+                    padding: Theme.space-20;
+
+                    Text {
+                        text: "No folder has its own settings. Set them from the Resume button while browsing a folder.";
+                        color: Theme.text-muted;
+                        font-size: Theme.meta-size;
+                        wrap: word-wrap;
+                    }
+                }
+
+                for item[index] in SettingsModel.overrides: VerticalLayout {
+                    if index > 0: Divider { }
+
+                    HorizontalLayout {
+                        padding-left: Theme.space-20;
+                        padding-right: Theme.space-20;
+                        padding-top: Theme.space-12;
+                        padding-bottom: Theme.space-12;
+                        spacing: Theme.space-16;
+
+                        RowText {
+                            title: item.folder;
+                            description: item.detail;
+                        }
+
+                        VerticalLayout {
+                            alignment: center;
+
+                            PillButton {
+                                text: "Clear";
+                                accessible-name: "Clear settings for " + item.folder;
+                                clicked => { SettingsModel.clear-override(index); }
+                            }
+                        }
+                    }
+                }
+            }
+
+            SettingsSection {
+                title: "Thumbnails";
+
+                SwitchRow {
+                    title: "Thumbnails for network shares";
+                    description: "Making one reads part of each file, which can be slow over a network.";
+                    on: SettingsModel.network-thumbnails;
+                    toggled(on) => { SettingsModel.set-network-thumbnails(on); }
+                }
+            }
+
+            SettingsSection {
+                title: "About";
+
+                VerticalLayout {
+                    padding: Theme.space-20;
+                    spacing: Theme.space-8;
+
+                    Text {
+                        text: "Enthuse " + SettingsModel.version;
+                        color: Theme.text;
+                        font-size: Theme.body-size;
+                        font-weight: Theme.body-strong-weight;
+                    }
+
+                    Text {
+                        text: "Free software under the GNU General Public License, version 3 (GPL-3.0).";
+                        color: Theme.text-muted;
+                        font-size: Theme.meta-size;
+                        wrap: word-wrap;
+                    }
+
+                    Text {
+                        text: "Not affiliated with Firecore or Infuse.";
+                        color: Theme.text-muted;
+                        font-size: Theme.meta-size;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+        }
+    }
+}

@@ -6,7 +6,9 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use super::{Entry, EntryKind, Source, SourceError, SourcePath, entry_order, is_video_file};
+use super::{
+    Entry, EntryKind, FileStamp, Source, SourceError, SourcePath, entry_order, is_video_file,
+};
 
 /// A folder on a filesystem the OS can read.
 #[derive(Debug, Clone)]
@@ -97,6 +99,19 @@ impl Source for LocalFs {
         }
         Ok(os_path.to_string_lossy().into_owned())
     }
+
+    fn stamp(&self, file: &SourcePath) -> Option<FileStamp> {
+        let meta = fs::metadata(self.os_path(file)).ok()?;
+        let modified = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_secs());
+        Some(FileStamp {
+            size: meta.len(),
+            modified,
+        })
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -157,6 +172,17 @@ mod tests {
 
     fn names(entries: &[Entry]) -> Vec<&str> {
         entries.iter().map(|e| e.name.as_str()).collect()
+    }
+
+    #[test]
+    fn stamps_files() {
+        let t = TempDir::new("stamp");
+        t.file("a.mkv");
+        let src = LocalFs::new(&t.0);
+        let stamp = src.stamp(&SourcePath::parse("a.mkv").unwrap()).unwrap();
+        assert_eq!(stamp.size, 1);
+        assert!(stamp.modified > 0);
+        assert_eq!(src.stamp(&SourcePath::parse("missing.mkv").unwrap()), None);
     }
 
     #[test]

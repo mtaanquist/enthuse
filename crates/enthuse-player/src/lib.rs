@@ -6,6 +6,7 @@
 
 pub mod gl;
 mod mpv;
+pub mod thumbnail;
 
 pub use mpv::MpvPlayer;
 
@@ -75,6 +76,34 @@ impl Track {
     }
 }
 
+/// Short summary of the selected subtitle and audio tracks for the player's
+/// menu button, e.g. `English, Danish audio`. The audio part is left out
+/// when the file has only one audio track.
+pub fn track_summary(tracks: &[Track]) -> String {
+    let subtitle = tracks
+        .iter()
+        .find(|t| t.kind == TrackKind::Subtitle && t.selected)
+        .map_or_else(|| "Subtitles off".to_owned(), short_label);
+    let audio: Vec<_> = tracks
+        .iter()
+        .filter(|t| t.kind == TrackKind::Audio)
+        .collect();
+    match audio.iter().find(|t| t.selected) {
+        Some(a) if audio.len() > 1 => format!("{subtitle}, {} audio", short_label(a)),
+        _ => subtitle,
+    }
+}
+
+/// The language name, else the title, else `Track N`.
+fn short_label(track: &Track) -> String {
+    track
+        .language
+        .as_deref()
+        .map(|l| language_name(l).unwrap_or(l).to_owned())
+        .or_else(|| track.title.clone())
+        .unwrap_or_else(|| format!("Track {}", track.id))
+}
+
 /// English names for common ISO 639 codes; others are shown as-is.
 fn language_name(code: &str) -> Option<&'static str> {
     Some(match code.to_ascii_lowercase().as_str() {
@@ -127,6 +156,15 @@ pub enum PlayerEvent {
     /// Display aspect ratio (width / height) of the video, or `None` if
     /// there is no video.
     AspectChanged(Option<f64>),
+    /// Volume in percent.
+    VolumeChanged(f64),
+    MuteChanged(bool),
+    /// Playback speed, 1.0 is normal.
+    SpeedChanged(f64),
+    /// Playback is waiting for data (e.g. a slow network share).
+    BufferingChanged(bool),
+    /// Position in seconds up to which the file is read ahead, if known.
+    BufferedChanged(Option<f64>),
 }
 
 /// Called from any thread when events are waiting. It must not call into
@@ -169,6 +207,9 @@ pub trait Player: Send + Sync {
     /// Volume in percent, 0 to 100.
     fn volume(&self) -> f64;
     fn set_volume(&self, percent: f64) -> Result<()>;
+    fn set_muted(&self, muted: bool) -> Result<()>;
+    /// Playback speed, 1.0 is normal.
+    fn set_speed(&self, speed: f64) -> Result<()>;
     /// All tracks of the current file.
     fn tracks(&self) -> Vec<Track>;
     /// Selects a track of `kind` by id, or turns that kind off with `None`.
@@ -226,5 +267,33 @@ mod tests {
         assert_eq!(track(None, Some("Commentary"), false).label(), "Commentary");
         assert_eq!(track(None, None, false).label(), "Track 3");
         assert_eq!(track(Some("xyz"), None, true).label(), "xyz [external]");
+    }
+
+    #[test]
+    fn summaries() {
+        let t = |kind, id, lang: &str, selected| Track {
+            id,
+            kind,
+            language: Some(lang.into()),
+            title: None,
+            codec: None,
+            selected,
+            external: false,
+        };
+        let sub = |lang, selected| t(TrackKind::Subtitle, 1, lang, selected);
+        let audio = |id, lang, selected| t(TrackKind::Audio, id, lang, selected);
+        assert_eq!(
+            track_summary(&[
+                sub("eng", true),
+                audio(1, "eng", false),
+                audio(2, "dan", true)
+            ]),
+            "English, Danish audio"
+        );
+        assert_eq!(
+            track_summary(&[sub("eng", false), audio(1, "eng", true)]),
+            "Subtitles off"
+        );
+        assert_eq!(track_summary(&[]), "Subtitles off");
     }
 }

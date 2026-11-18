@@ -54,6 +54,27 @@ pub fn resolve(
     }
 }
 
+/// How a folder override reads in Settings: the folder's name (the
+/// source's name for its top folder), and a line with where it is and
+/// what it sets, e.g. "NAS / Shows / Kids, resume off".
+pub fn override_row(
+    source_name: &str,
+    folder: &SourcePath,
+    o: &FolderOverrides,
+) -> (String, String) {
+    let title = folder.name().unwrap_or(source_name).to_owned();
+    let place = std::iter::once(source_name)
+        .chain(folder.segments())
+        .collect::<Vec<_>>()
+        .join(" / ");
+    let what = match o.resume {
+        Some(true) => "resume on",
+        Some(false) => "resume off",
+        None => "no own settings",
+    };
+    (title, format!("{place}, {what}"))
+}
+
 /// The next value when the user taps a three-way setting: inherit, then
 /// off, then on, then inherit again.
 pub fn cycle(value: Option<bool>) -> Option<bool> {
@@ -96,6 +117,18 @@ mod tests {
         assert!(resolve(g, &p("Shows"), &o).resume);
         // An empty override inherits from further up.
         assert!(resolve(g, &p("Shows/Kids/S01"), &o).resume);
+    }
+
+    #[test]
+    fn override_rows() {
+        assert_eq!(
+            override_row("NAS", &p("Shows/Kids"), &resume(false)),
+            ("Kids".into(), "NAS / Shows / Kids, resume off".into())
+        );
+        assert_eq!(
+            override_row("NAS", &SourcePath::root(), &resume(true)),
+            ("NAS".into(), "NAS, resume on".into())
+        );
     }
 
     #[test]
