@@ -11,7 +11,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use enthuse_core::pip::{Edges, Orientation, Rect, anchor, fit_area, resize};
+use enthuse_core::pip::{Edges, Orientation, Rect, anchor, fit_area, resize, user_resized};
 use enthuse_core::storage::Store;
 use enthuse_player::Player;
 
@@ -56,9 +56,10 @@ pub struct Pip {
     store: Rc<Store>,
     /// The aspect ratio the window was last fitted to.
     shown_aspect: Cell<Option<f64>>,
-    /// The window system resized the window for us (Wayland), so its size
-    /// is the user's choice; remembered when the video or mode changes.
-    os_resized: Cell<bool>,
+    /// The window size we last set or saw the user choose. A different
+    /// size later means the user resized it some other way (the window
+    /// system on Wayland, Snap, keyboard), which is remembered too.
+    expected: Cell<Option<(i32, i32)>>,
     /// Set while PiP is on.
     saved: Cell<Option<Saved>>,
     /// Follows the pointer during a move or resize we do ourselves.
@@ -94,7 +95,7 @@ impl Pip {
             player,
             store,
             shown_aspect: Cell::new(None),
-            os_resized: Cell::new(false),
+            expected: Cell::new(None),
             saved: Cell::new(None),
             drag: RefCell::new(None),
         });
@@ -212,11 +213,11 @@ impl Pip {
             screen,
         );
         self.shown_aspect.set(a);
-        self.os_resized.set(false);
+        self.expected.set(Some((w, h)));
         let mut rect = Rect { x: 0, y: 0, w, h };
         let placed = !is_wayland(&m)
             && screen.is_some_and(|screen| {
-                let margin = (PIP_MARGIN * scale) as i32;
+                let margin = margin(scale);
                 rect.x = screen.x + screen.w - rect.w - margin;
                 rect.y = screen.y + screen.h - rect.h - margin;
                 true
@@ -238,7 +239,8 @@ impl Pip {
         let Some(m) = self.main.upgrade() else {
             return;
         };
-        self.remember_os_resize(&m);
+        self.remember_user_resize(&m);
+        self.expected.set(None);
         // Take the browser window's place, as the user left it.
         let target = if self.side.window().is_visible() {
             let mut g = geometry(self.side.window());
@@ -287,7 +289,7 @@ impl Pip {
         let Some(a) = aspect(&m) else {
             return;
         };
-        self.remember_os_resize(&m);
+        self.remember_user_resize(&m);
         let current = window_rect(&m);
         let screen = monitor(&m);
         let size = self.size_for(
@@ -297,6 +299,7 @@ impl Pip {
             screen,
         );
         self.shown_aspect.set(Some(a));
+        self.expected.set(Some(size));
         let fitted = anchor(current, size, screen);
         if fitted != current {
             set_rect(&m, fitted);
@@ -325,7 +328,7 @@ impl Pip {
             }
         };
         let max = screen.map(|s| {
-            let margin = 2 * (PIP_MARGIN * scale).round() as i32;
+            let margin = 2 * margin(scale);
             (s.w - margin, s.h - margin)
         });
         fit_area(like, a, min_size(scale), max)
@@ -343,15 +346,16 @@ impl Pip {
         }
     }
 
-    /// After a resize by the window system, remembers the window's size
-    /// for the video it was showing.
-    fn remember_os_resize(&self, m: &AppWindow) {
-        if !self.os_resized.take() {
+    /// If the user resized the window some way other than our own drag,
+    /// remembers its size for the video it was showing.
+    fn remember_user_resize(&self, m: &AppWindow) {
+        let (Some(expected), Some(a)) = (self.expected.get(), self.shown_aspect.get()) else {
             return;
-        }
-        if let Some(a) = self.shown_aspect.get() {
-            let r = window_rect(m);
+        };
+        let r = window_rect(m);
+        if user_resized(expected, (r.w, r.h), a) {
             self.remember(a, (r.w, r.h), m.window().scale_factor());
+            self.expected.set(Some((r.w, r.h)));
         }
     }
 
@@ -366,9 +370,6 @@ impl Pip {
         };
         let readable = !is_wayland(&m) && pointer::read().is_some_and(|p| p.left_down);
         if !readable {
-            if direction.is_some() {
-                self.os_resized.set(true);
-            }
             os_drag(&m, direction);
             return;
         }
@@ -407,7 +408,10 @@ impl Pip {
                         pip.drag.borrow_mut().take();
                         if let (true, Some(a)) = (resized, ratio) {
                             pip.remember(a, size, scale);
+                            pip.expected.set(Some(size));
                         }
+                        // The video may have changed during the drag.
+                        pip.fit_video();
                     }
                 });
                 return;
@@ -437,6 +441,11 @@ fn geometry(window: &slint::Window) -> Saved {
         maximized: window.is_maximized(),
         fullscreen: window.is_fullscreen(),
     }
+}
+
+/// Gap between the PiP window and the screen edges, in physical pixels.
+fn margin(scale: f32) -> i32 {
+    (PIP_MARGIN * scale).round() as i32
 }
 
 /// The smallest PiP size in physical pixels.

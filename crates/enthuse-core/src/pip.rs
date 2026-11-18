@@ -164,6 +164,24 @@ pub fn fit_area(
     (w.round() as i32, h.round() as i32)
 }
 
+/// How far the window may be off the size we set, in physical pixels,
+/// before it counts as resized by the user (window systems may round).
+const RESIZE_SLACK: i32 = 2;
+
+/// Whether a PiP window now `current` in size, which we last set to
+/// `expected` for a video with `aspect`, was resized by the user. A size
+/// of the other orientation is not counted: that is a resize of ours the
+/// window system has not reported yet.
+pub fn user_resized(expected: (i32, i32), current: (i32, i32), aspect: f64) -> bool {
+    let off = (current.0 - expected.0).abs() > RESIZE_SLACK
+        || (current.1 - expected.1).abs() > RESIZE_SLACK;
+    off && current.0 > 0
+        && current.1 > 0
+        && aspect.is_finite()
+        && aspect > 0.0
+        && Orientation::of(current.0 as f64 / current.1 as f64) == Orientation::of(aspect)
+}
+
 /// The window `current` resized to `size`. The corner nearest the
 /// screen's matching corner stays put, so a PiP window in a screen corner
 /// stays in it, and the window is kept on the screen where it fits.
@@ -374,5 +392,62 @@ mod tests {
         // Larger than the screen: top-left on it.
         let r3 = anchor(r, (2000, 1200), Some(SCREEN));
         assert_eq!((r3.x, r3.y), (0, 0));
+    }
+
+    #[test]
+    fn anchor_on_offset_screen() {
+        // A second monitor left of and above the primary.
+        let screen = Rect {
+            x: -1920,
+            y: -200,
+            w: 1920,
+            h: 1080,
+        };
+        let corner = Rect {
+            x: -528,
+            y: 562,
+            w: 480,
+            h: 270,
+        };
+        let r = anchor(corner, (270, 480), Some(screen));
+        assert_eq!((r.x + r.w, r.y + r.h), (-48, 832));
+        let left = Rect {
+            x: -1872,
+            y: -152,
+            ..corner
+        };
+        let r = anchor(left, (270, 480), Some(screen));
+        assert_eq!((r.x, r.y), (-1872, -152));
+    }
+
+    #[test]
+    fn fit_same_aspect_boundary() {
+        // Within 1%: kept as is. Beyond: refitted to the exact ratio.
+        assert_eq!(fit_area((484, 270), 16.0 / 9.0, MIN, None), (484, 270));
+        let (w, h) = fit_area((500, 270), 16.0 / 9.0, MIN, None);
+        assert!(((w as f64 / h as f64) - 16.0 / 9.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn fit_degenerate_inputs() {
+        // A zero-size window still gets at least the minimum.
+        assert_eq!(fit_area((0, 0), 16.0 / 9.0, MIN, None), (192, 108));
+        // A zero max falls back to the minimum.
+        assert_eq!(
+            fit_area((480, 270), 16.0 / 9.0, MIN, Some((0, 0))),
+            (192, 108)
+        );
+    }
+
+    #[test]
+    fn detects_user_resize() {
+        let wide = 16.0 / 9.0;
+        assert!(!user_resized((480, 270), (480, 270), wide));
+        // Rounding by the window system is not a resize.
+        assert!(!user_resized((480, 270), (481, 269), wide));
+        assert!(user_resized((480, 270), (640, 360), wide));
+        // Still the old portrait size: our resize has not landed yet.
+        assert!(!user_resized((480, 270), (270, 480), wide));
+        assert!(!user_resized((480, 270), (640, 360), 0.0));
     }
 }
