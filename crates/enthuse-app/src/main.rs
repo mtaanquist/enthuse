@@ -9,7 +9,6 @@ mod browser;
 mod home;
 mod nav;
 mod pip;
-mod pip_geometry;
 mod playback;
 mod pointer;
 mod recent;
@@ -159,7 +158,7 @@ fn run(
         });
         output.attach(&window, Some(capture.clone()))?;
     }
-    let pip = pip::Pip::new(&window, browser.clone(), player.clone())?;
+    let pip = pip::Pip::new(&window, browser.clone(), player.clone(), store.clone())?;
     playback.attach_side(pip.side());
     home.attach_side(pip.side());
     settings.attach_side(pip.side());
