@@ -137,17 +137,18 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-
       # Release notes come from the workflow's own ref, so a hand run from
-      # main finds notes added after the tag.
+      # main finds notes added after the tag. Checkout cleans the workspace,
+      # so it runs before the packages are downloaded.
       - uses: actions/checkout@v4
         if: env.RELEASE_TAG != ''
         with:
           sparse-checkout: docs/releases
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
 
       - name: Publish release
         if: env.RELEASE_TAG != ''
