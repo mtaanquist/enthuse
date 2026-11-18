@@ -8,7 +8,6 @@
 use slint::{ComponentHandle, Timer};
 
 slint::slint! {
-    #[edition = "1.19"]
     import { Theme, Icons } from "../ui/theme.slint";
     import { ButtonVariant, IconButton, PillButton } from "../ui/components/buttons.slint";
     import { SegmentedControl } from "../ui/components/segmented-control.slint";

@@ -147,4 +147,4 @@ Every change is saved at once; there is no Save button.
 - Everything in the mockups is supported: rounded corners, borders, drop shadows, linear gradients, opacity, clipping and `animate`. Slint has no backdrop blur, so overlays use translucent fills, not frosted glass.
 - Keep logic (sorting, badges, next file, resume) in `enthuse-core`. The UI only displays the state it is given.
 - Tokens live in `crates/enthuse-app/ui/theme.slint` (`Theme` and `Icons`), base components in `ui/components/`. Run `cargo run -p enthuse-app --example gallery` to see them all in one window.
-- Inter is bundled from `ui/fonts/` under the SIL Open Font License (`ui/fonts/OFL.txt`). Slint 1.19 can't turn on OpenType features, so times don't use tabular figures yet; give time labels a fixed width so they don't shift the layout.
+- Inter is bundled from `ui/fonts/` under the SIL Open Font License (`ui/fonts/OFL.txt`). Slint (1.18 and 1.19) can't turn on OpenType features, so times don't use tabular figures yet; give time labels a fixed width so they don't shift the layout.
