@@ -3,19 +3,30 @@ name: Pre-release
 # Builds Windows and Linux packages from every push to a staging branch and
 # publishes them as a GitHub pre-release, so the app can be tried without a
 # Rust toolchain. Each staging branch has one rolling pre-release (tag
-# `prerelease-<branch>`) that is replaced on every push. Linux packages are
+# `prerelease-<branch>`) that is replaced on every push. Pushing a version
+# tag (`v0.1.0`) builds the same packages and publishes them as that
+# release, with the notes from `docs/releases/<tag>.md`. If that release
+# already exists (e.g. made by hand on GitHub), the packages are added to
+# it and its notes are kept. To build packages for an existing tag whose
+# commit predates this workflow, run it by hand from main with `tag` set. Linux packages are
 # built on Ubuntu 24.04 rather than ubuntu-latest, so they also run on distributions
 # with an older glibc.
 
 on:
   push:
     branches: ["staging/**"]
+    tags: ["v*"]
   # Pull requests only build the packages, so changes here can be checked
   # before they publish anything.
   pull_request:
     branches: [main, "staging/**"]
     paths: [".github/workflows/prerelease.yml", ".github/scripts/**"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing version tag to build and attach packages to (e.g. v0.1.0). Empty: pre-release of the selected branch."
+        required: false
+        default: ""
 
 concurrency:
   group: prerelease-${{ github.ref }}
@@ -23,6 +34,10 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # The version tag being released, or empty for a staging pre-release.
+  RELEASE_TAG: ${{ inputs.tag || (github.ref_type == 'tag' && github.ref_name) || '' }}
+  # "release" for a version tag, else "pre-release"; used in README.txt.
+  KIND: ${{ (inputs.tag || github.ref_type == 'tag') && 'release' || 'pre-release' }}
   # Keep in step with ci.yml.
   MPV_WINBUILD_TAG: "20261111"
 
@@ -36,6 +51,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # A release builds the tagged commit, also when run by hand.
+          ref: ${{ env.RELEASE_TAG || github.ref }}
 
       - name: Install Rust toolchain
         run: rustup show active-toolchain || rustup toolchain install
@@ -75,8 +93,8 @@ jobs:
           dir=enthuse-linux-x86_64
           mkdir -p "$dir"
           cp target/release/enthuse LICENSE "$dir"/
-          cat > "$dir"/README.txt <<'EOF'
-          Enthuse pre-release for Linux (x86_64).
+          cat > "$dir"/README.txt <<EOF
+          Enthuse $KIND for Linux (x86_64).
 
           Needs libmpv from your distribution:
             Debian/Ubuntu: sudo apt install libmpv2
@@ -97,7 +115,7 @@ jobs:
           Get-ChildItem "${{ runner.temp }}/libmpv" -Filter "libmpv-*.dll" |
             Copy-Item -Destination $dir
           @(
-            "Enthuse pre-release for Windows (x86_64).",
+            "Enthuse $env:KIND for Windows (x86_64).",
             "",
             "Unzip anywhere and run enthuse.exe. libmpv is included",
             "(from https://github.com/shinchiro/mpv-winbuild-cmake, GPL)."
@@ -124,7 +142,42 @@ jobs:
           path: dist
           merge-multiple: true
 
+      # Release notes come from the workflow's own ref, so a hand run from
+      # main finds notes added after the tag.
+      - uses: actions/checkout@v4
+        if: env.RELEASE_TAG != ''
+        with:
+          sparse-checkout: docs/releases
+
+      - name: Publish release
+        if: env.RELEASE_TAG != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ env.RELEASE_TAG }}
+        run: |
+          # Name the assets after the version, e.g. enthuse-0.1.0-windows-x86_64.zip.
+          for f in dist/enthuse-*; do
+            mv "$f" "dist/enthuse-${TAG#v}-${f#dist/enthuse-}"
+          done
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            # Made by hand: add the packages and keep its title and notes.
+            gh release upload "$TAG" dist/* --clobber
+            exit 0
+          fi
+          notes="docs/releases/$TAG.md"
+          if [ ! -f "$notes" ]; then
+            echo "::error::Missing release notes $notes"
+            exit 1
+          fi
+          # 0.x versions are early releases, but still the latest release.
+          gh release create "$TAG" dist/* \
+            --verify-tag \
+            --title "Enthuse $TAG" \
+            --notes-file "$notes"
+
       - name: Publish pre-release
+        if: env.RELEASE_TAG == ''
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}

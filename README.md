@@ -2,7 +2,7 @@
 
 Infuse-style media player for Windows and Linux, built with Rust, Slint and libmpv.
 
-Status: early prototype.
+Status: early release (0.x). Things may change between versions, including settings and stored data. Downloads are on the [Releases](https://github.com/mtaanquist/enthuse/releases) page.
 
 See [docs/design.md](docs/design.md) for goals and design decisions.
 
