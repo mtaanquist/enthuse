@@ -8,7 +8,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use enthuse_core::folder::{Badge, FolderView, SortOrder};
-use enthuse_core::library::{drop_target, library_name, move_target};
+use enthuse_core::library::{drop_target, library_name};
 use enthuse_core::settings::cycle;
 use enthuse_core::source::{
     COMPUTER_NAME, Computer, Entry, EntryKind, LocalFs, Source, SourceError, SourcePath,
@@ -298,23 +298,9 @@ impl Browser {
         self.reload_sources();
     }
 
-    /// Whether the library at `index` can move one place earlier or
-    /// `later`: not past either end of its group (favourites or the rest).
-    pub fn can_move_source(&self, index: usize, later: bool) -> bool {
-        let favorites: Vec<bool> = self.sources.borrow().iter().map(|s| s.favorite).collect();
-        move_target(&favorites, index, later).is_some()
-    }
-
-    /// Moves the library at `index` one place earlier or `later`.
-    pub fn move_source(self: &Rc<Self>, index: usize, later: bool) {
-        let favorites: Vec<bool> = self.sources.borrow().iter().map(|s| s.favorite).collect();
-        if let Some(target) = move_target(&favorites, index, later) {
-            self.reorder(index, target);
-        }
-    }
-
-    /// Puts the library dragged from `from` at `to`, within its group.
-    pub fn drop_source(self: &Rc<Self>, from: usize, to: usize) {
+    /// Moves the library at `from` to `to`, kept within its group
+    /// (favourites, or the rest).
+    pub fn move_source(self: &Rc<Self>, from: usize, to: usize) {
         let favorites: Vec<bool> = self.sources.borrow().iter().map(|s| s.favorite).collect();
         if let Some(target) = drop_target(&favorites, from, to) {
             self.reorder(from, target);

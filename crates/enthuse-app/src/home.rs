@@ -54,15 +54,9 @@ macro_rules! wire_callbacks {
         let h = $home.clone();
         model.on_open_source(move |i| h.browser.open_source(i as usize));
         let h = $home.clone();
-        // Later, so the tile (and its menu) that asked is not destroyed
-        // while its own click is still being handled.
-        model.on_remove_source(move |i| {
-            let h = h.clone();
-            slint::Timer::single_shot(Duration::ZERO, move || h.browser.remove_source(i as usize));
-        });
-        let h = $home.clone();
         model.on_add_source(move || h.pick_folder());
-        // These rebuild the tiles, so they also wait for the click to end.
+        // Rebuilds the tiles, so it waits for the click (and the menu that
+        // asked) to end.
         let h = $home.clone();
         model.on_toggle_favorite(move |i| {
             let h = h.clone();
@@ -70,27 +64,6 @@ macro_rules! wire_callbacks {
                 let index = i as usize;
                 let favorite = h.browser.sources().get(index).is_some_and(|s| s.favorite);
                 h.browser.set_source_favorite(index, !favorite);
-            });
-        });
-        let h = $home.clone();
-        model.on_rename_source(move |i, name| {
-            let h = h.clone();
-            slint::Timer::single_shot(Duration::ZERO, move || {
-                h.browser.rename_source(i as usize, &name)
-            });
-        });
-        let h = $home.clone();
-        model.on_move_source(move |i, later| {
-            let h = h.clone();
-            slint::Timer::single_shot(Duration::ZERO, move || {
-                h.browser.move_source(i as usize, later)
-            });
-        });
-        let h = $home.clone();
-        model.on_drop_source(move |from, to| {
-            let h = h.clone();
-            slint::Timer::single_shot(Duration::ZERO, move || {
-                h.browser.drop_source(from as usize, to as usize)
             });
         });
         let h = $home.clone();
@@ -230,7 +203,6 @@ impl Home {
         *self.items.borrow_mut() = items;
 
         let sources = self.browser.sources();
-        let favorite_count = sources.iter().filter(|s| s.favorite).count() as i32;
         let tiles: Vec<_> = (0..sources.len()).map(|i| self.tile(&sources, i)).collect();
         self.tiles.set_vec(tiles);
 
@@ -257,7 +229,6 @@ impl Home {
         self.each_model(|m| {
             m.set_continue_items(cards.clone());
             m.set_favorites(favorite_tiles.clone());
-            m.set_favorite_count(favorite_count);
             m.set_sources(tiles.clone());
             m.set_loaded(true);
         });
@@ -311,8 +282,6 @@ impl Home {
             .unwrap_or(false);
         SourceTileItem {
             favorite: library.favorite,
-            can_move_earlier: self.browser.can_move_source(index, false),
-            can_move_later: self.browser.can_move_source(index, true),
             ..tile(&library.source.name, &library.location, offline)
         }
     }
@@ -382,8 +351,6 @@ fn tile(name: &str, location: &str, offline: bool) -> SourceTileItem {
         },
         offline,
         favorite: false,
-        can_move_earlier: false,
-        can_move_later: false,
         folder: false,
     }
 }
@@ -409,8 +376,6 @@ fn folder_tile(library: &Library, path: &SourcePath, offline: bool) -> SourceTil
         icon: SourceIcon::Folder,
         offline,
         favorite: false,
-        can_move_earlier: false,
-        can_move_later: false,
         folder: true,
     }
 }

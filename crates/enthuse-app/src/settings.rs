@@ -1,19 +1,21 @@
 //! Settings screen (#69). Fills `SettingsModel` in both windows and saves
-//! each change as soon as it is made.
+//! each change as soon as it is made. Libraries (#59) are arranged here:
+//! order, favourites, names, removal and their own resume setting.
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::Duration;
 
 use enthuse_core::settings::override_row;
-use enthuse_core::source::SourcePath;
+use enthuse_core::source::{SourcePath, is_network_location};
 use enthuse_core::storage::{SourceId, Store};
 use enthuse_core::watched::{
     FRACTION_STEPS, REMAINING_STEPS, WatchedMode, WatchedRule, percent_label, remaining_label, step,
 };
-use slint::{ComponentHandle, ModelRc, VecModel, Weak};
+use slint::{ComponentHandle, Model, ModelRc, VecModel, Weak};
 
-use crate::browser::Browser;
-use crate::{AppWindow, BrowserWindow, OverrideItem, SettingsModel};
+use crate::browser::{Browser, Library};
+use crate::{AppWindow, BrowserWindow, LibraryItem, OverrideItem, SettingsModel};
 
 pub struct Settings {
     main: Weak<AppWindow>,
@@ -22,6 +24,9 @@ pub struct Settings {
     browser: Rc<Browser>,
     /// The folders listed under "Folder settings", in order.
     overrides: RefCell<Vec<(SourceId, SourcePath)>>,
+    /// The rows under "Libraries". Updated in place, so a name being
+    /// typed survives a refresh (they come often, e.g. during playback).
+    libraries: Rc<VecModel<LibraryItem>>,
     /// Called after every saved change.
     listeners: RefCell<Vec<Box<dyn Fn()>>>,
 }
@@ -50,9 +55,41 @@ macro_rules! wire_callbacks {
         });
         let s = $settings.clone();
         model.on_clear_override(move |i| s.clear_override(i as usize));
+        // These change the list, so they run once the click (and the row
+        // that asked) is done.
+        let s = $settings.clone();
+        model.on_library_favorite(move |i| {
+            let s = s.clone();
+            later(move || {
+                let favorite = s
+                    .browser
+                    .sources()
+                    .get(i as usize)
+                    .is_some_and(|l| l.favorite);
+                s.browser.set_source_favorite(i as usize, !favorite);
+            });
+        });
+        let s = $settings.clone();
+        model.on_library_rename(move |i, name| {
+            let s = s.clone();
+            later(move || s.browser.rename_source(i as usize, &name));
+        });
+        let s = $settings.clone();
+        model.on_library_move(move |from, to| {
+            let s = s.clone();
+            later(move || s.browser.move_source(from as usize, to as usize));
+        });
+        let s = $settings.clone();
+        model.on_library_remove(move |i| {
+            let s = s.clone();
+            later(move || s.browser.remove_source(i as usize));
+        });
+        let s = $settings.clone();
+        model.on_library_resume(move |i, choice| s.set_library_resume(i as usize, choice));
         let s = $settings.clone();
         model.on_refresh(move || s.refresh());
         model.set_version(env!("CARGO_PKG_VERSION").into());
+        model.set_libraries(ModelRc::from($settings.libraries.clone()));
     }};
 }
 
@@ -64,9 +101,17 @@ impl Settings {
             store,
             browser,
             overrides: Default::default(),
+            libraries: Rc::new(VecModel::default()),
             listeners: Default::default(),
         });
         wire_callbacks!(window, this);
+        // Libraries change from Home and the browser too.
+        let weak = Rc::downgrade(&this);
+        this.browser.add_change_handler(Box::new(move || {
+            if let Some(this) = weak.upgrade() {
+                this.refresh();
+            }
+        }));
         this.refresh();
         this
     }
@@ -128,6 +173,59 @@ impl Settings {
         self.save(|store| store.set_folder_resume(id, &path, None));
     }
 
+    /// A library's own resume setting: 0 same as Playback, 1 on, 2 off.
+    fn set_library_resume(&self, index: usize, choice: i32) {
+        let Some(library) = self.browser.sources().get(index).cloned() else {
+            return;
+        };
+        let resume = match choice {
+            1 => Some(true),
+            2 => Some(false),
+            _ => None,
+        };
+        self.save(|store| store.set_folder_resume(library.source.id, &SourcePath::root(), resume));
+    }
+
+    /// The rows under "Libraries", in list order.
+    fn library_items(&self) -> Vec<LibraryItem> {
+        let libraries = self.browser.sources();
+        let favorites = libraries.iter().filter(|l| l.favorite).count();
+        libraries
+            .iter()
+            .map(|library| {
+                let Library {
+                    source,
+                    location,
+                    favorite,
+                } = library;
+                let own = self
+                    .store
+                    .folder_overrides(source.id)
+                    .ok()
+                    .and_then(|o| o.get(&SourcePath::root()).and_then(|o| o.resume));
+                let (first, last) = if *favorite {
+                    (0, favorites.saturating_sub(1))
+                } else {
+                    (favorites, libraries.len().saturating_sub(1))
+                };
+                LibraryItem {
+                    id: source.id.0 as i32,
+                    name: source.name.as_str().into(),
+                    location: location.as_str().into(),
+                    network: is_network_location(location),
+                    favorite: *favorite,
+                    resume: match own {
+                        None => 0,
+                        Some(true) => 1,
+                        Some(false) => 2,
+                    },
+                    group_first: first as i32,
+                    group_last: last as i32,
+                }
+            })
+            .collect()
+    }
+
     /// Loads every setting from the database into the screen.
     pub fn refresh(&self) {
         let defaults = self.store.default_playback_settings().unwrap_or_default();
@@ -157,6 +255,17 @@ impl Settings {
         }
         *self.overrides.borrow_mut() = listed;
 
+        let libraries = self.library_items();
+        if libraries.len() == self.libraries.row_count() {
+            for (i, row) in libraries.into_iter().enumerate() {
+                if self.libraries.row_data(i).as_ref() != Some(&row) {
+                    self.libraries.set_row_data(i, row);
+                }
+            }
+        } else {
+            self.libraries.set_vec(libraries);
+        }
+
         let first = |steps: &[f64]| steps.first().copied().unwrap_or_default();
         let last = |steps: &[f64]| steps.last().copied().unwrap_or_default();
         self.each_model(|m| {
@@ -174,4 +283,9 @@ impl Settings {
             m.set_overrides(ModelRc::new(VecModel::from(items.clone())));
         });
     }
+}
+
+/// Runs `f` once the current event is handled.
+fn later(f: impl FnOnce() + 'static) {
+    slint::Timer::single_shot(Duration::ZERO, f);
 }

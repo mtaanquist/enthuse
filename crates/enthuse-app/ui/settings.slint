@@ -1,8 +1,9 @@
-// Settings screen (#69): playback, folder overrides, thumbnails, about.
+// Settings screen (#69): libraries (#59), playback, folder overrides,
+// thumbnails, about.
 // Rust fills SettingsModel for each window and saves every change at once;
 // the screen only displays it.
 
-import { ScrollView } from "std-widgets.slint";
+import { LineEdit, ScrollView } from "std-widgets.slint";
 import { Theme, Icons } from "theme.slint";
 import { ButtonVariant, IconButton, PillButton } from "components/buttons.slint";
 import { ButtonBehavior } from "components/behavior.slint";
@@ -15,7 +16,26 @@ export struct OverrideItem {
     detail: string,
 }
 
+// A saved library, in list order: favourites first.
+export struct LibraryItem {
+    // Its database id: rows move, so state such as which one is open
+    // follows the id, not the index.
+    id: int,
+    name: string,
+    // Folder path or share.
+    location: string,
+    network: bool,
+    favorite: bool,
+    // Its own resume setting: 0 same as Playback, 1 on, 2 off.
+    resume: int,
+    // The first and last index of its group (favourites, or the rest): it
+    // can only be moved within it.
+    group-first: int,
+    group-last: int,
+}
+
 export global SettingsModel {
+    in property <[LibraryItem]> libraries;
     in property <bool> resume: true;
     in property <bool> auto-next: true;
     in property <bool> network-thumbnails: true;
@@ -40,6 +60,16 @@ export global SettingsModel {
     callback step-percent(int);
     callback step-remaining(int);
     callback clear-override(int);
+    callback library-favorite(int);
+    // A new name; empty goes back to the folder's own name.
+    callback library-rename(int, string);
+    // A library from the first index to the second (dragged, or moved one
+    // place with the arrows).
+    callback library-move(int, int);
+    // Forgets the library and its watch state.
+    callback library-remove(int);
+    // 0 same as Playback, 1 on, 2 off.
+    callback library-resume(int, int);
     // Asks Rust to load everything again, e.g. when the screen shows.
     callback refresh();
 }
@@ -312,9 +342,215 @@ component SettingsSection inherits VerticalLayout {
     }
 }
 
+// One library: drag handle, name and path, favourite, up and down, and
+// an expand button for its name, resume setting and removal.
+component LibraryRow inherits Rectangle {
+    in property <LibraryItem> item;
+    in property <int> index;
+    in property <bool> expanded;
+    in property <bool> dragged;
+    in property <bool> resume-default: true;
+    callback toggle-expanded();
+    callback drag-start();
+    // How far the pointer moved since the last call.
+    callback drag-move(length);
+    callback drag-end();
+
+    property <bool> confirm-remove;
+    changed expanded => { root.confirm-remove = false; }
+
+    background: root.dragged ? Theme.surface-raised : Theme.surface;
+    drop-shadow-blur: root.dragged ? 24px : 0px;
+    drop-shadow-color: rgba(0, 0, 0, 0.45);
+
+    VerticalLayout {
+        if root.index > 0: Divider { }
+
+        HorizontalLayout {
+            min-height: 72px;
+            padding-left: Theme.space-8;
+            padding-right: Theme.space-12;
+            spacing: Theme.space-8;
+
+            // Drag to reorder. With a finger, rest on it for a moment
+            // first: a quick swipe scrolls the page instead.
+            handle := Rectangle {
+                width: Theme.touch-target;
+                height: Theme.touch-target;
+                y: (parent.height - self.height) / 2;
+                accessible-role: none;
+
+                Image {
+                    width: Theme.icon-size;
+                    height: Theme.icon-size;
+                    source: Icons.grip;
+                    colorize: handle-touch.has-hover || root.dragged ? Theme.text : Theme.text-muted;
+                }
+
+                handle-touch := TouchArea {
+                    mouse-cursor: root.dragged ? grabbing : grab;
+                    pointer-event(event) => {
+                        if (event.kind == PointerEventKind.down) {
+                            root.drag-start();
+                        } else if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                            root.drag-end();
+                        }
+                    }
+                    // This area moves with the row, so its offset is on top
+                    // of how far the row has moved already.
+                    moved => { root.drag-move(self.mouse-y - self.pressed-y); }
+                }
+            }
+
+            Image {
+                width: Theme.icon-size;
+                height: Theme.icon-size;
+                y: (parent.height - self.height) / 2;
+                source: root.item.network ? Icons.server : Icons.drive;
+                colorize: Theme.accent;
+            }
+
+            RowText {
+                horizontal-stretch: 1;
+                title: root.item.name;
+                description: root.item.location;
+            }
+
+            IconButton {
+                y: (parent.height - self.height) / 2;
+                variant: ButtonVariant.outline;
+                border-width: 0px;
+                icon: root.item.favorite ? Icons.star-filled : Icons.star;
+                label: root.item.favorite ? "Remove " + root.item.name + " from favourites" : "Add " + root.item.name + " to favourites";
+                keep-focus: true;
+                clicked => { SettingsModel.library-favorite(root.index); }
+            }
+
+            IconButton {
+                y: (parent.height - self.height) / 2;
+                variant: ButtonVariant.outline;
+                border-width: 0px;
+                icon: Icons.chevron-up;
+                label: "Move " + root.item.name + " up";
+                enabled: root.index > root.item.group-first;
+                keep-focus: true;
+                clicked => { SettingsModel.library-move(root.index, root.index - 1); }
+            }
+
+            IconButton {
+                y: (parent.height - self.height) / 2;
+                variant: ButtonVariant.outline;
+                border-width: 0px;
+                icon: Icons.chevron-down;
+                label: "Move " + root.item.name + " down";
+                enabled: root.index < root.item.group-last;
+                keep-focus: true;
+                clicked => { SettingsModel.library-move(root.index, root.index + 1); }
+            }
+
+            IconButton {
+                y: (parent.height - self.height) / 2;
+                icon: root.expanded ? Icons.chevron-up : Icons.more;
+                label: (root.expanded ? "Close settings for " : "Settings for ") + root.item.name;
+                keep-focus: true;
+                clicked => { root.toggle-expanded(); }
+            }
+        }
+
+        if root.expanded: VerticalLayout {
+            padding-left: Theme.space-20;
+            padding-right: Theme.space-20;
+            padding-bottom: Theme.space-20;
+            spacing: Theme.space-16;
+
+            HorizontalLayout {
+                spacing: Theme.space-12;
+
+                name-field := LineEdit {
+                    height: Theme.touch-target;
+                    font-size: Theme.body-size;
+                    text: root.item.name;
+                    placeholder-text: "Leave empty for the folder's name";
+                    accepted(text) => { SettingsModel.library-rename(root.index, text); }
+                }
+
+                PillButton {
+                    variant: ButtonVariant.primary;
+                    text: "Rename";
+                    enabled: name-field.text != root.item.name;
+                    clicked => { SettingsModel.library-rename(root.index, name-field.text); }
+                }
+            }
+
+            VerticalLayout {
+                spacing: Theme.space-12;
+
+                RowText {
+                    title: "Resume where you left off";
+                    description: "For this library and its folders, unless a folder has its own setting.";
+                }
+
+                TextSegments {
+                    segments: [root.resume-default ? "Same as Playback (on)" : "Same as Playback (off)", "On", "Off"];
+                    selected: root.item.resume;
+                    select(i) => { SettingsModel.library-resume(root.index, i); }
+                }
+            }
+
+            HorizontalLayout {
+                alignment: start;
+                spacing: Theme.space-12;
+
+                PillButton {
+                    icon: Icons.close;
+                    variant: root.confirm-remove ? ButtonVariant.primary : ButtonVariant.outline;
+                    text: root.confirm-remove ? "Remove, and forget its watch state" : "Remove library";
+                    clicked => {
+                        if (root.confirm-remove) {
+                            SettingsModel.library-remove(root.index);
+                        } else {
+                            root.confirm-remove = true;
+                        }
+                    }
+                }
+
+                if root.confirm-remove: PillButton {
+                    text: "Keep it";
+                    clicked => { root.confirm-remove = false; }
+                }
+            }
+        }
+    }
+}
+
 export component SettingsPage inherits Rectangle {
     property <length> pad: root.width < 700px ? Theme.space-24 : Theme.content-padding-x;
     property <bool> narrow: root.width < 640px;
+
+    // The id of the library whose settings are open, or -1.
+    property <int> expanded-id: -1;
+    // Dragging a library: from its index, to where it would land, and how
+    // far it has moved. The rows in between slide over to make room.
+    property <int> drag-from: -1;
+    property <int> drag-to: -1;
+    property <length> drag-dy;
+    // The height of a collapsed row, measured when a drag starts: rows
+    // shift by this much (expanded rows close first).
+    property <length> row-step: 72px;
+
+    // Where the row at `index` shows while another is dragged.
+    pure function slot(index: int) -> int {
+        if (root.drag-from < 0 || index == root.drag-from) {
+            return index;
+        }
+        if (root.drag-from < root.drag-to && index > root.drag-from && index <= root.drag-to) {
+            return index - 1;
+        }
+        if (root.drag-to < root.drag-from && index >= root.drag-to && index < root.drag-from) {
+            return index + 1;
+        }
+        index
+    }
 
     scroll := ScrollView {
         content-width: self.visible-width;
@@ -336,6 +572,66 @@ export component SettingsPage inherits Rectangle {
                 font-size: Theme.title-size;
                 font-weight: Theme.title-weight;
                 letter-spacing: Theme.title-letter-spacing;
+            }
+
+            SettingsSection {
+                title: "Libraries";
+
+                if SettingsModel.libraries.length == 0: HorizontalLayout {
+                    padding: Theme.space-20;
+
+                    Text {
+                        text: "No libraries yet. Add a folder or network share from Home.";
+                        color: Theme.text-muted;
+                        font-size: Theme.meta-size;
+                        wrap: word-wrap;
+                    }
+                }
+
+                for item[index] in SettingsModel.libraries: Rectangle {
+                    property <bool> dragged: index == root.drag-from;
+
+                    height: row.preferred-height;
+                    z: self.dragged ? 1 : 0;
+
+                    row := LibraryRow {
+                        y: parent.dragged ? root.drag-dy : (root.slot(index) - index) * root.row-step;
+                        width: parent.width;
+                        animate y {
+                            duration: parent.dragged ? 0ms : Theme.hover-duration;
+                        }
+                        item: item;
+                        index: index;
+                        expanded: root.expanded-id == item.id;
+                        dragged: parent.dragged;
+                        resume-default: SettingsModel.resume;
+                        toggle-expanded => {
+                            root.expanded-id = root.expanded-id == item.id ? -1 : item.id;
+                        }
+                        drag-start => {
+                            // Rows have one height while dragging.
+                            root.expanded-id = -1;
+                            root.row-step = max(1px, parent.height);
+                            root.drag-from = index;
+                            root.drag-to = index;
+                            root.drag-dy = 0;
+                        }
+                        drag-move(dy) => {
+                            if (root.drag-from == index) {
+                                root.drag-dy += dy;
+                                root.drag-to = clamp(index + round(root.drag-dy / root.row-step), item.group-first, item.group-last);
+                            }
+                        }
+                        drag-end => {
+                            if (root.drag-from == index && root.drag-to != index) {
+                                SettingsModel.library-move(index, root.drag-to);
+                            }
+                            root.drag-from = -1;
+                            root.drag-to = -1;
+                            root.drag-dy = 0;
+                        }
+                    }
+                }
             }
 
             SettingsSection {

@@ -16,7 +16,7 @@ import { RecentModel, RecentPage } from "recent.slint";
 export { BrowserModel, BrowserItem, ItemKind, ItemBadge } from "browser.slint";
 export { HomeModel, ContinueItem, SourceTileItem, SourceIcon } from "home.slint";
 export { PlayerModel, PlayerLayout, TrackItem } from "player.slint";
-export { SettingsModel, OverrideItem } from "settings.slint";
+export { SettingsModel, OverrideItem, LibraryItem } from "settings.slint";
 export { RecentModel } from "recent.slint";
 
 export { Section }
@@ -494,6 +494,9 @@ component AppScreens inherits Rectangle {
             open-favorite(index) => {
                 HomeModel.open-favorite(index);
                 root.section = Section.browse;
+            }
+            manage-libraries => {
+                root.section = Section.settings;
             }
         }
 
