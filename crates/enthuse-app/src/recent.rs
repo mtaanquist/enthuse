@@ -109,7 +109,6 @@ impl Recent {
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_secs() as i64);
         let thumbs = self.thumbs.borrow().clone();
-        let locations = self.browser.sources();
         let mut items = Vec::new();
         let mut rows = Vec::new();
         for (id, path, state, at) in played {
@@ -123,11 +122,8 @@ impl Recent {
             if let Some(t) = &thumbs
                 && rows.len() < THUMB_ROWS
             {
-                let location = locations
-                    .iter()
-                    .find(|(s, _)| s.id == id)
-                    .map_or("", |(_, l)| l.as_str());
-                t.want(id, &source.source, location, &path);
+                let location = self.browser.location_of(id, &path);
+                t.want(id, &source.source, &location, &path);
             }
             let badge = badge(&state);
             rows.push(BrowserItem {

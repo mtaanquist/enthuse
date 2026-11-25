@@ -53,65 +53,77 @@ impl Source for LocalFs {
     }
 
     fn list(&self, dir: &SourcePath) -> Result<Vec<Entry>, SourceError> {
-        let os_dir = self.os_path(dir);
-        let meta = fs::metadata(&os_dir).map_err(|e| map_err(dir, e))?;
-        if !meta.is_dir() {
-            return Err(SourceError::NotAFolder(dir.clone()));
-        }
-
-        let mut entries = Vec::new();
-        for item in fs::read_dir(&os_dir).map_err(|e| map_err(dir, e))? {
-            // A single unreadable entry should not hide the rest of the folder.
-            let Ok(item) = item else { continue };
-            // Names that are not valid UTF-8 cannot be stored as SourcePaths.
-            let Ok(name) = item.file_name().into_string() else {
-                continue;
-            };
-            if name.starts_with('.') {
-                continue;
-            }
-            // Follow symlinks; skip broken ones.
-            let Ok(meta) = fs::metadata(item.path()) else {
-                continue;
-            };
-            if platform::is_hidden(&meta) {
-                continue;
-            }
-            let kind = if meta.is_dir() {
-                EntryKind::Folder
-            } else if meta.is_file() && is_video_file(&name) {
-                EntryKind::Video
-            } else {
-                continue;
-            };
-            let Ok(path) = dir.join(&name) else { continue };
-            entries.push(Entry { name, path, kind });
-        }
-        entries.sort_by(entry_order);
-        Ok(entries)
+        list_dir(&self.os_path(dir), dir)
     }
 
     fn playable(&self, file: &SourcePath) -> Result<String, SourceError> {
-        let os_path = self.os_path(file);
-        let meta = fs::metadata(&os_path).map_err(|e| map_err(file, e))?;
-        if !meta.is_file() {
-            return Err(SourceError::NotFound(file.clone()));
-        }
-        Ok(os_path.to_string_lossy().into_owned())
+        playable_file(&self.os_path(file), file)
     }
 
     fn stamp(&self, file: &SourcePath) -> Option<FileStamp> {
-        let meta = fs::metadata(self.os_path(file)).ok()?;
-        let modified = meta
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map_or(0, |d| d.as_secs());
-        Some(FileStamp {
-            size: meta.len(),
-            modified,
-        })
+        stamp_file(&self.os_path(file))
     }
+}
+
+/// Lists the folder `os_dir`, which is `dir` inside its source.
+pub(super) fn list_dir(os_dir: &Path, dir: &SourcePath) -> Result<Vec<Entry>, SourceError> {
+    let meta = fs::metadata(os_dir).map_err(|e| map_err(dir, e))?;
+    if !meta.is_dir() {
+        return Err(SourceError::NotAFolder(dir.clone()));
+    }
+
+    let mut entries = Vec::new();
+    for item in fs::read_dir(os_dir).map_err(|e| map_err(dir, e))? {
+        // A single unreadable entry should not hide the rest of the folder.
+        let Ok(item) = item else { continue };
+        // Names that are not valid UTF-8 cannot be stored as SourcePaths.
+        let Ok(name) = item.file_name().into_string() else {
+            continue;
+        };
+        if name.starts_with('.') {
+            continue;
+        }
+        // Follow symlinks; skip broken ones.
+        let Ok(meta) = fs::metadata(item.path()) else {
+            continue;
+        };
+        if platform::is_hidden(&meta) {
+            continue;
+        }
+        let kind = if meta.is_dir() {
+            EntryKind::Folder
+        } else if meta.is_file() && is_video_file(&name) {
+            EntryKind::Video
+        } else {
+            continue;
+        };
+        let Ok(path) = dir.join(&name) else { continue };
+        entries.push(Entry { name, path, kind });
+    }
+    entries.sort_by(entry_order);
+    Ok(entries)
+}
+
+/// The player URL for the file `os_path`, which is `file` inside its source.
+pub(super) fn playable_file(os_path: &Path, file: &SourcePath) -> Result<String, SourceError> {
+    let meta = fs::metadata(os_path).map_err(|e| map_err(file, e))?;
+    if !meta.is_file() {
+        return Err(SourceError::NotFound(file.clone()));
+    }
+    Ok(os_path.to_string_lossy().into_owned())
+}
+
+pub(super) fn stamp_file(os_path: &Path) -> Option<FileStamp> {
+    let meta = fs::metadata(os_path).ok()?;
+    let modified = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_secs());
+    Some(FileStamp {
+        size: meta.len(),
+        modified,
+    })
 }
 
 #[cfg(target_os = "windows")]
