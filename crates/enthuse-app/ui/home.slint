@@ -43,7 +43,6 @@ export global HomeModel {
 
     callback play(int);
     callback open-source(int);
-    callback add-source();
     callback toggle-favorite(int);
     callback open-favorite(int);
     callback remove-favorite(int);
@@ -536,11 +535,6 @@ export component HomePage inherits Rectangle {
                         clicked => { root.manage-libraries(); }
                     }
 
-                    PillButton {
-                        icon: Icons.add;
-                        text: "Add library";
-                        clicked => { HomeModel.add-source(); }
-                    }
                 }
 
                 Rectangle {
@@ -590,7 +584,7 @@ export component HomePage inherits Rectangle {
                     spacing: Theme.space-20;
 
                     Text {
-                        text: "Add a folder or network share to get started";
+                        text: "Add a folder or network share under Libraries to get started";
                         color: Theme.text;
                         font-size: Theme.section-size;
                         font-weight: Theme.section-weight;
@@ -604,9 +598,9 @@ export component HomePage inherits Rectangle {
                         PillButton {
                             size: 48px;
                             variant: ButtonVariant.primary;
-                            icon: Icons.add;
-                            text: "Add library";
-                            clicked => { HomeModel.add-source(); }
+                            icon: Icons.library;
+                            text: "Open Libraries";
+                            clicked => { root.manage-libraries(); }
                         }
                     }
                 }

@@ -58,6 +58,8 @@ export global BrowserModel {
     callback up();
     callback activate(int);
     callback add-source(string);
+    // Pick a folder to add as a library with the system dialog.
+    callback pick-folder();
     callback cycle-resume();
     callback cycle-sort();
     // Go to the folder at this breadcrumb index (0 = the source's root).
@@ -595,6 +597,14 @@ export component BrowserPage inherits Rectangle {
                         self.text = "";
                         root.adding = false;
                     }
+                }
+            }
+
+            PillButton {
+                text: "Browse…";
+                clicked => {
+                    root.adding = false;
+                    BrowserModel.pick-folder();
                 }
             }
 

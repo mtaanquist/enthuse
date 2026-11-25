@@ -3,7 +3,7 @@
 //! Fills `HomeModel` in both windows, so Home looks the same in the
 //! browser window during PiP.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::time::Duration;
@@ -16,9 +16,7 @@ use slint::{ComponentHandle, Model, ModelRc, VecModel, Weak};
 use crate::browser::{Browser, Library, SourceRef};
 use crate::nav::Nav;
 use crate::thumbs::{Thumbs, thumb_id};
-use crate::{
-    AppWindow, BrowserWindow, ContinueItem, HomeModel, Section, SourceIcon, SourceTileItem, bg,
-};
+use crate::{AppWindow, BrowserWindow, ContinueItem, HomeModel, SourceIcon, SourceTileItem, bg};
 
 /// Cards in the "Continue watching" row.
 const CONTINUE_LIMIT: usize = 4;
@@ -46,8 +44,6 @@ pub struct Home {
     /// Sources whose reachability check is still running. A dead share can
     /// take a minute to fail; this keeps refreshes from piling up threads.
     checking: RefCell<HashSet<SourceId>>,
-    /// The folder picker is open.
-    picking: Cell<bool>,
 }
 
 /// Connects a window's Home callbacks to `$home`.
@@ -63,8 +59,6 @@ macro_rules! wire_callbacks {
                 h.browser.open_source(index);
             }
         });
-        let h = $home.clone();
-        model.on_add_source(move || h.pick_folder());
         let h = $home.clone();
         model.on_show_libraries(move || h.browser.show_libraries());
         // Rebuilds the tiles, so it waits for the click (and the menu that
@@ -118,7 +112,6 @@ impl Home {
             favorites: Default::default(),
             offline: Default::default(),
             checking: Default::default(),
-            picking: Cell::new(false),
         });
         wire_callbacks!(window, this);
         let weak = Rc::downgrade(&this);
@@ -308,62 +301,12 @@ impl Home {
         }
     }
 
-    /// Switches the window the browser shows in to Browse.
-    fn show_browse(&self) {
-        let side = self.side.borrow().as_ref().and_then(|w| w.upgrade());
-        match side {
-            Some(s) if s.window().is_visible() => s.set_section(Section::Browse),
-            _ => {
-                if let Some(m) = self.main.upgrade() {
-                    m.set_section(Section::Browse);
-                }
-            }
-        }
-    }
-
     fn play(&self, index: usize) {
         let Some((source, path)) = self.items.borrow().get(index).cloned() else {
             return;
         };
         if let Some(nav) = self.nav.borrow().as_ref().and_then(|n| n.upgrade()) {
             nav.play(source, path);
-        }
-    }
-
-    /// Asks for a folder with the system dialog, adds it as a library and
-    /// opens it in Browse, in the window that asked.
-    fn pick_folder(self: &Rc<Self>) {
-        if self.picking.replace(true) {
-            return; // Already open.
-        }
-        let mut dialog = rfd::AsyncFileDialog::new().set_title("Add library");
-        // Owned by the window that asked, so it stays on top of it.
-        let side = self.side.borrow().as_ref().and_then(|w| w.upgrade());
-        let main = self.main.upgrade();
-        let parent = match (&side, &main) {
-            (Some(s), _) if s.window().is_visible() => Some(s.window().window_handle()),
-            (_, Some(m)) => Some(m.window().window_handle()),
-            _ => None,
-        };
-        if let Some(parent) = &parent {
-            dialog = dialog.set_parent(parent);
-        }
-        let picked = dialog.pick_folder();
-        let this = Rc::downgrade(self);
-        let spawned = slint::spawn_local(async move {
-            let folder = picked.await;
-            if let Some(this) = this.upgrade() {
-                this.picking.set(false);
-                if let Some(folder) = folder
-                    && let Some(index) = this.browser.add_local(&folder.path().to_string_lossy())
-                {
-                    this.browser.open_source(index);
-                    this.show_browse();
-                }
-            }
-        });
-        if spawned.is_err() {
-            self.picking.set(false);
         }
     }
 }

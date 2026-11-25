@@ -118,6 +118,8 @@ macro_rules! wire_callbacks {
         let b = $browser.clone();
         model.on_add_library(move || b.save_unsaved());
         let b = $browser.clone();
+        model.on_pick_folder(move || b.pick_folder());
+        let b = $browser.clone();
         $window
             .global::<SidebarModel>()
             .on_show_libraries(move || b.show_libraries());
@@ -160,6 +162,8 @@ pub struct Browser {
     /// (e.g. after playback), so Home can update.
     on_change: RefCell<Vec<Box<dyn Fn()>>>,
     thumbs: RefCell<Option<Rc<Thumbs>>>,
+    /// The folder picker is open.
+    picking: Cell<bool>,
 }
 
 impl Browser {
@@ -192,6 +196,7 @@ impl Browser {
             on_play: Default::default(),
             on_change: Default::default(),
             thumbs: Default::default(),
+            picking: Cell::new(false),
         });
         this.load_sources();
 
@@ -597,6 +602,38 @@ impl Browser {
             path,
         });
         self.changed();
+    }
+
+    /// Asks for a folder with the system dialog, adds it as a library and
+    /// opens it.
+    fn pick_folder(self: &Rc<Self>) {
+        if self.picking.replace(true) {
+            return; // Already open.
+        }
+        let mut dialog = rfd::AsyncFileDialog::new().set_title("Add library");
+        // Owned by the window that asked, so it stays on top of it.
+        if let Some(ui) = self.ui() {
+            match &ui {
+                Ui::Main(w) => dialog = dialog.set_parent(&w.window().window_handle()),
+                Ui::Side(w) => dialog = dialog.set_parent(&w.window().window_handle()),
+            }
+        }
+        let picked = dialog.pick_folder();
+        let this = Rc::downgrade(self);
+        let spawned = slint::spawn_local(async move {
+            let folder = picked.await;
+            if let Some(this) = this.upgrade() {
+                this.picking.set(false);
+                if let Some(folder) = folder
+                    && let Some(index) = this.add_local(&folder.path().to_string_lossy())
+                {
+                    this.open_source(index);
+                }
+            }
+        });
+        if spawned.is_err() {
+            self.picking.set(false);
+        }
     }
 
     /// Shows the list of libraries (Libraries in the sidebar, clicked again).

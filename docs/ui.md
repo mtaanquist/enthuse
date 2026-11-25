@@ -56,13 +56,13 @@ Sidebar, then:
 1. Title "Home" and a search button.
 2. "Continue watching": up to 4 cards in one row, most recent first. Hidden when empty.
 3. "Favourites", when there are any: starred libraries, then starred folders (with "Library / parent" under the name), as SourceTiles. Hidden when empty.
-4. "Libraries" with "Manage" (to the Libraries page) and "Add library" buttons: grid of SourceTiles, 3 per row, favourites first, then the user's order. Libraries hidden from Home (the eye on the Libraries page) are left out of Home altogether, Favourites too.
+4. "Libraries" with a "Manage" button (to the Libraries page): grid of SourceTiles, 3 per row, favourites first, then the user's order. Libraries hidden from Home (the eye on the Libraries page) are left out of Home altogether, Favourites too.
 
-Tapping a card resumes playback. Tapping a library opens it in the folder browser. A library tile's menu has "Add to / Remove from favourites" and "Manage libraries…"; a Favourites tile's menu only unstars it. Home is for watching: arranging libraries happens on the Libraries page.
+Tapping a card resumes playback. Tapping a library opens it in the folder browser. A library tile's menu has "Add to / Remove from favourites" and "Manage libraries…"; a Favourites tile's menu only unstars it. Home is for watching and browsing: adding and arranging libraries happens on the Libraries page.
 
 ### Libraries
 
-The sidebar's Libraries item opens the list of all libraries, also those left off Home, with "Add library". Libraries are arranged here. Each row has a drag handle, its name and path, a star, an eye (shown on Home, or crossed out when left off), up and down buttons (within its group: favourites stay first) and a settings button. Tapping the row opens the folder browser at its root. Drag the handle to reorder; with a finger, rest on it a moment first, since a quick swipe scrolls the list.
+The sidebar's Libraries item opens the list of all libraries, also those left off Home, with "Add library": a path field (folder, mount or `\server\share`), "Browse…" for the system folder dialog, and "Open". Libraries are arranged here. Each row has a drag handle, its name and path, a star, an eye (shown on Home, or crossed out when left off), up and down buttons (within its group: favourites stay first) and a settings button. Tapping the row opens the folder browser at its root. Drag the handle to reorder; with a finger, rest on it a moment first, since a quick swipe scrolls the list.
 
 The settings button opens the library's dialog over a scrim: its name (empty goes back to the folder's name), its own "Resume where you left off" (Same as Playback, On, Off), and "Remove library", which asks again since it forgets the watch state. Changes save at once, the name on Done or Enter. Escape, the scrim or Done close it. Later sources (SMB address and credentials) add their settings here. Coming back to Libraries from another section returns to the folder last browsed; clicking it again while there goes to the list. A library just added opens right away.
 
@@ -138,7 +138,7 @@ Every change is saved at once; there is no Save button.
 | Disabled | 40% opacity, no hover. |
 | Loading a folder | Keep the header, show 6 placeholder rows (`surface`, no shimmer). Show them only if loading takes over 150ms. |
 | Empty folder | Centered message "No videos in this folder" in `text-muted`, with a "Back" button. |
-| No libraries yet (first run) | Home shows one large prompt in place of the libraries grid: "Add a folder or network share to get started" with the "Add library" primary button. Continue watching is hidden. |
+| No libraries yet (first run) | Home shows one large prompt in place of the libraries grid: "Add a folder or network share under Libraries to get started" with an "Open Libraries" primary button. Continue watching is hidden. |
 | Source offline or unreachable | Tile shows the kind chip as "Offline" and dimmed content. Opening it shows "Can't reach NAS media" with "Retry" and "Edit source". |
 | Credentials needed (SMB) | Dialog with user name, password, "Remember" and "Connect" (see #21). |
 | File missing or failed to open | Toast at the bottom: "Couldn't play E05" with the reason from the player, and the browser stays where it was. |
