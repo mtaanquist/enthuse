@@ -5,9 +5,11 @@
 //! inside a source are [`SourcePath`]s: relative, `/`-separated and
 //! platform-independent, so they can be stored as keys for watch state.
 
+mod computer;
 mod local;
 mod path;
 
+pub use computer::{COMPUTER_NAME, Computer, relative_to};
 pub use local::LocalFs;
 pub use path::{InvalidPath, SourcePath};
 

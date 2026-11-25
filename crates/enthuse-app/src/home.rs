@@ -148,12 +148,6 @@ impl Home {
         let mut items = Vec::new();
         let mut cards = Vec::new();
         let thumbs = self.thumbs.borrow().clone();
-        let locations: HashMap<SourceId, String> = self
-            .browser
-            .sources()
-            .into_iter()
-            .map(|(s, location)| (s.id, location))
-            .collect();
         for (id, path, state) in recent {
             let Some(source) = self.browser.source_by_id(id) else {
                 continue;
@@ -163,8 +157,8 @@ impl Home {
             let thumbnail = match &thumbs {
                 // An offline share could only hang the worker.
                 Some(t) if !offline => {
-                    let location = locations.get(&id).map_or("", String::as_str);
-                    t.want(id, &source.source, location, &path);
+                    let location = self.browser.location_of(id, &path);
+                    t.want(id, &source.source, &location, &path);
                     t.image(&thumb_id(id, &path))
                 }
                 Some(t) => t.image(&thumb_id(id, &path)),
