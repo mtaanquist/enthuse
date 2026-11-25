@@ -5,6 +5,7 @@
 //! unit tested on any platform.
 
 pub mod controls;
+pub mod ended;
 pub mod folder;
 pub mod natsort;
 pub mod next;
