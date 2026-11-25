@@ -1,4 +1,5 @@
 // Settings screen (#69): playback, folder overrides, thumbnails, about.
+// Libraries are managed on the Libraries page (#59).
 // Rust fills SettingsModel for each window and saves every change at once;
 // the screen only displays it.
 
@@ -6,6 +7,7 @@ import { ScrollView } from "std-widgets.slint";
 import { Theme, Icons } from "theme.slint";
 import { ButtonVariant, IconButton, PillButton } from "components/buttons.slint";
 import { ButtonBehavior } from "components/behavior.slint";
+import { Divider, RowText, SwitchRow, TextSegments } from "components/controls.slint";
 
 // A folder with its own settings.
 export struct OverrideItem {
@@ -49,168 +51,6 @@ component SectionHeading inherits Text {
     font-size: Theme.section-size;
     font-weight: Theme.section-weight;
     vertical-alignment: center;
-}
-
-// An on/off switch. The whole row is the tap target (see SwitchRow); this
-// is the drawing.
-component Switch inherits Rectangle {
-    in property <bool> on;
-    in property <bool> hover;
-
-    width: 48px;
-    height: 28px;
-    border-radius: self.height / 2;
-    background: root.on ? (root.hover ? Theme.hovered(Theme.accent) : Theme.accent) : (root.hover ? Theme.line-strong.brighter(0.2) : Theme.line-strong);
-
-    animate background {
-        duration: Theme.hover-duration;
-    }
-
-    Rectangle {
-        x: root.on ? parent.width - self.width - 4px : 4px;
-        width: 20px;
-        height: 20px;
-        border-radius: self.height / 2;
-        background: root.on ? Theme.on-accent : Theme.text-muted;
-
-        animate x {
-            duration: Theme.hover-duration;
-        }
-    }
-}
-
-// Title, an optional description, and a control on the right.
-component RowText inherits VerticalLayout {
-    in property <string> title;
-    in property <string> description;
-
-    alignment: center;
-    spacing: Theme.space-4;
-
-    Text {
-        text: root.title;
-        color: Theme.text;
-        font-size: Theme.body-size;
-        font-weight: Theme.body-weight;
-        wrap: word-wrap;
-    }
-
-    if root.description != "": Text {
-        text: root.description;
-        color: Theme.text-muted;
-        font-size: Theme.meta-size;
-        wrap: word-wrap;
-    }
-}
-
-// A setting that is on or off. Tapping anywhere on the row flips it.
-component SwitchRow inherits Rectangle {
-    in property <string> title;
-    in property <string> description;
-    in property <bool> on;
-    callback toggled(bool);
-
-    min-height: 64px;
-    background: behavior.has-hover ? Theme.surface-raised : transparent;
-    forward-focus: behavior;
-    accessible-role: switch;
-    accessible-label: root.title;
-    accessible-description: root.description;
-    accessible-checkable: true;
-    accessible-checked: root.on;
-    accessible-action-default => { root.toggled(!root.on); }
-
-    animate background {
-        duration: Theme.hover-duration;
-    }
-
-    HorizontalLayout {
-        padding-left: Theme.space-20;
-        padding-right: Theme.space-20;
-        padding-top: Theme.space-12;
-        padding-bottom: Theme.space-12;
-        spacing: Theme.space-16;
-
-        RowText {
-            title: root.title;
-            description: root.description;
-        }
-
-        VerticalLayout {
-            alignment: center;
-
-            Switch {
-                on: root.on;
-                hover: behavior.has-hover;
-            }
-        }
-    }
-
-    // Keyboard focus, drawn inside the row: the card clips anything outside.
-    if behavior.keyboard-focus: Rectangle {
-        border-width: Theme.focus-ring-width;
-        border-color: Theme.accent;
-        border-radius: Theme.radius-small;
-    }
-
-    behavior := ButtonBehavior {
-        ring-radius: 0;
-        show-ring: false;
-        keep-focus: true;
-        clicked => { root.toggled(!root.on); }
-    }
-}
-
-// Text segments with one selected.
-component TextSegments inherits Rectangle {
-    in property <[string]> segments;
-    in property <int> selected;
-    callback select(int);
-
-    // Each segment is a full touch target inside the 3px padding.
-    height: Theme.touch-target + 6px;
-    border-radius: self.height / 2;
-    border-width: 1px;
-    border-color: Theme.line;
-
-    HorizontalLayout {
-        padding: 3px;
-        spacing: 2px;
-
-        for segment[index] in root.segments: Rectangle {
-            property <bool> active: index == root.selected;
-
-            horizontal-stretch: 1;
-            min-width: label.preferred-width + 2 * Theme.space-16;
-            border-radius: self.height / 2;
-            background: self.active ? Theme.line-strong : behavior.pressed ? Theme.pressed(Theme.surface) : behavior.has-hover ? Theme.surface : transparent;
-            forward-focus: behavior;
-            accessible-role: button;
-            accessible-label: segment;
-            accessible-checkable: true;
-            accessible-checked: self.active;
-            accessible-action-default => { root.select(index); }
-
-            animate background {
-                duration: Theme.hover-duration;
-            }
-
-            label := Text {
-                text: segment;
-                color: parent.active ? Theme.text : Theme.text-muted;
-                font-size: Theme.label-size;
-                font-weight: Theme.label-weight;
-                vertical-alignment: center;
-                horizontal-alignment: center;
-            }
-
-            behavior := ButtonBehavior {
-                ring-radius: parent.border-radius;
-                keep-focus: true;
-                clicked => { root.select(index); }
-            }
-        }
-    }
 }
 
 // Minus, the value, plus.
@@ -280,11 +120,6 @@ component StepperRow inherits HorizontalLayout {
     }
 }
 
-component Divider inherits Rectangle {
-    height: 1px;
-    background: Theme.line;
-}
-
 // A rounded group of rows.
 component Card inherits Rectangle {
     border-radius: Theme.radius-large;
@@ -315,6 +150,7 @@ component SettingsSection inherits VerticalLayout {
 export component SettingsPage inherits Rectangle {
     property <length> pad: root.width < 700px ? Theme.space-24 : Theme.content-padding-x;
     property <bool> narrow: root.width < 640px;
+
 
     scroll := ScrollView {
         content-width: self.visible-width;

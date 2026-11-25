@@ -7,6 +7,7 @@ import { Theme, Icons, KeyFocus } from "theme.slint";
 import { ButtonVariant, IconButton, PillButton } from "components/buttons.slint";
 import { ButtonBehavior, FocusGrid } from "components/behavior.slint";
 import { SegmentedControl } from "components/segmented-control.slint";
+import { LibraryList } from "libraries.slint";
 import { TipText } from "components/tip-text.slint";
 
 // Kinds and badges, kept in step with browser.rs.
@@ -47,13 +48,18 @@ export global BrowserModel {
     in property <string> sort-label: "Sort: Name";
     // A folder that was dropped or opened without adding it as a library.
     in property <bool> unsaved;
+    // The folder shown can be a favourite (inside a library), and is one.
+    // At a library's root, that is the library itself.
+    in property <bool> can-favorite;
+    in property <bool> favorite;
     // 0 = list, 1 = grid.
     in-out property <int> view-mode;
 
     callback up();
     callback activate(int);
-    callback remove(int);
     callback add-source(string);
+    // Pick a folder to add as a library with the system dialog.
+    callback pick-folder();
     callback cycle-resume();
     callback cycle-sort();
     // Go to the folder at this breadcrumb index (0 = the source's root).
@@ -62,6 +68,7 @@ export global BrowserModel {
     callback retry();
     // Save the folder shown, opened without a library, as a library.
     callback add-library();
+    callback toggle-favorite();
 }
 
 // Path segments separated by "/". When too long, it is cut off on the left
@@ -294,7 +301,7 @@ export component FileRow inherits Rectangle {
         visible: root.removable;
         enabled: root.removable;
         icon: Icons.close;
-        label: "Remove source";
+        label: "Remove library";
         clicked => { root.remove(); }
     }
 }
@@ -503,6 +510,12 @@ export component BrowserPage inherits Rectangle {
                 clicked(i) => { BrowserModel.crumb(i); }
             }
 
+            if BrowserModel.can-favorite: IconButton {
+                icon: BrowserModel.favorite ? Icons.star-filled : Icons.star;
+                label: BrowserModel.favorite ? "Remove from favourites" : "Add to favourites";
+                clicked => { BrowserModel.toggle-favorite(); }
+            }
+
             SegmentedControl {
                 segments: [{ icon: Icons.list, label: "List" }, { icon: Icons.grid, label: "Grid" }];
                 selected <=> BrowserModel.view-mode;
@@ -561,18 +574,11 @@ export component BrowserPage inherits Rectangle {
                 clicked => { BrowserModel.primary-action(); }
             }
 
-            // The default resume setting, until Settings exists (#69).
-            if BrowserModel.at-sources: PillButton {
-                y: (parent.height - self.height) / 2;
-                text: BrowserModel.resume-label;
-                clicked => { BrowserModel.cycle-resume(); }
-            }
-
             if BrowserModel.at-sources: PillButton {
                 y: (parent.height - self.height) / 2;
                 variant: root.adding ? ButtonVariant.outline : ButtonVariant.primary;
                 icon: root.adding ? Icons.close : Icons.add;
-                text: root.adding ? "Cancel" : "Add source";
+                text: root.adding ? "Cancel" : "Add library";
                 clicked => { root.adding = !root.adding; }
             }
         }
@@ -591,6 +597,14 @@ export component BrowserPage inherits Rectangle {
                         self.text = "";
                         root.adding = false;
                     }
+                }
+            }
+
+            PillButton {
+                text: "Browse…";
+                clicked => {
+                    root.adding = false;
+                    BrowserModel.pick-folder();
                 }
             }
 
@@ -639,11 +653,12 @@ export component BrowserPage inherits Rectangle {
                 back => { BrowserModel.up(); }
             }
 
-            if !BrowserModel.loading && BrowserModel.error == "" && BrowserModel.items.length > 0 && (BrowserModel.view-mode == 0 || BrowserModel.at-sources): FileList {
+            // The Libraries page: arranged here (#59).
+            if BrowserModel.at-sources && BrowserModel.items.length > 0: LibraryList { }
+
+            if !BrowserModel.loading && BrowserModel.error == "" && BrowserModel.items.length > 0 && BrowserModel.view-mode == 0 && !BrowserModel.at-sources: FileList {
                 items: BrowserModel.items;
-                removable: BrowserModel.at-sources;
                 activate(i) => { BrowserModel.activate(i); }
-                remove(i) => { BrowserModel.remove(i); }
             }
 
             if !BrowserModel.loading && BrowserModel.error == "" && BrowserModel.items.length > 0 && BrowserModel.view-mode == 1 && !BrowserModel.at-sources: grid := ScrollView {

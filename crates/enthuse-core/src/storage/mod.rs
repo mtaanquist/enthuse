@@ -79,8 +79,13 @@ pub struct SourceId(pub i64);
 pub struct SavedSource {
     pub id: SourceId,
     pub kind: String,
+    /// The display name, which the user can change.
     pub name: String,
     pub location: String,
+    /// Listed before the others (#59).
+    pub favorite: bool,
+    /// Left off Home; still in the sidebar, Browse and Settings (#59).
+    pub hidden: bool,
 }
 
 /// Playback state of one file.
@@ -144,11 +149,12 @@ impl Store {
     // Sources
 
     /// Saves a source, or returns the existing one with the same kind and
-    /// location (renaming it to `name`).
+    /// location. An existing source keeps its name, which the user may
+    /// have chosen.
     pub fn add_source(&self, kind: &str, name: &str, location: &str) -> Result<SourceId> {
         let id = self.conn.query_row(
             "INSERT INTO sources (kind, name, location, created_at) VALUES (?1, ?2, ?3, ?4)
-             ON CONFLICT (kind, location) DO UPDATE SET name = excluded.name
+             ON CONFLICT (kind, location) DO UPDATE SET name = name
              RETURNING id",
             params![kind, name, location, now()],
             |r| r.get(0),
@@ -156,20 +162,117 @@ impl Store {
         Ok(SourceId(id))
     }
 
-    /// All saved sources, oldest first.
+    /// All saved sources as they are listed: favourites first, then in the
+    /// user's order, then the rest oldest first.
     pub fn sources(&self) -> Result<Vec<SavedSource>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id, kind, name, location FROM sources ORDER BY created_at, id")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT id, kind, name, location, favorite, hidden FROM sources
+             ORDER BY favorite DESC, sort_order IS NULL, sort_order, created_at, id",
+        )?;
         let rows = stmt.query_map([], |r| {
             Ok(SavedSource {
                 id: SourceId(r.get(0)?),
                 kind: r.get(1)?,
                 name: r.get(2)?,
                 location: r.get(3)?,
+                favorite: r.get(4)?,
+                hidden: r.get(5)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Changes the name a source is shown with.
+    pub fn rename_source(&self, id: SourceId, name: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE sources SET name = ?2 WHERE id = ?1",
+            params![id.0, name],
+        )?;
+        Ok(())
+    }
+
+    /// Marks a source as a favourite, listed first, or not.
+    pub fn set_source_favorite(&self, id: SourceId, favorite: bool) -> Result<()> {
+        self.conn.execute(
+            "UPDATE sources SET favorite = ?2 WHERE id = ?1",
+            params![id.0, favorite],
+        )?;
+        Ok(())
+    }
+
+    /// Shows a source on Home, or leaves it off.
+    pub fn set_source_hidden(&self, id: SourceId, hidden: bool) -> Result<()> {
+        self.conn.execute(
+            "UPDATE sources SET hidden = ?2 WHERE id = ?1",
+            params![id.0, hidden],
+        )?;
+        Ok(())
+    }
+
+    /// Saves the user's order: `ids` first to last. Sources left out keep
+    /// their place after these.
+    pub fn set_source_order(&self, ids: &[SourceId]) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        for (i, id) in ids.iter().enumerate() {
+            self.conn.execute(
+                "UPDATE sources SET sort_order = ?2 WHERE id = ?1",
+                params![id.0, i as i64],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    // Favourite folders
+
+    /// Favourite folders inside sources, in the order they were marked.
+    pub fn favorite_folders(&self) -> Result<Vec<(SourceId, SourcePath)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT source_id, path FROM favorite_folders ORDER BY created_at, rowid")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, path) = row?;
+            let path =
+                SourcePath::parse(&path).map_err(|e| StorageError::Corrupt(e.to_string()))?;
+            out.push((SourceId(id), path));
+        }
+        Ok(out)
+    }
+
+    /// Marks a folder as a favourite, or not.
+    pub fn set_folder_favorite(
+        &self,
+        source: SourceId,
+        folder: &SourcePath,
+        favorite: bool,
+    ) -> Result<()> {
+        if favorite {
+            self.conn.execute(
+                "INSERT INTO favorite_folders (source_id, path, created_at) VALUES (?1, ?2, ?3)
+                 ON CONFLICT (source_id, path) DO NOTHING",
+                params![source.0, folder.as_str(), now()],
+            )?;
+        } else {
+            self.conn.execute(
+                "DELETE FROM favorite_folders WHERE source_id = ?1 AND path = ?2",
+                params![source.0, folder.as_str()],
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn is_favorite_folder(&self, source: SourceId, folder: &SourcePath) -> Result<bool> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT 1 FROM favorite_folders WHERE source_id = ?1 AND path = ?2",
+                params![source.0, folder.as_str()],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
     }
 
     /// Moves the watch state and folder settings of `folder` in `from`, and
@@ -718,6 +821,57 @@ mod tests {
     }
 
     #[test]
+    fn sources_list_favourites_first_then_in_the_users_order() {
+        let s = store();
+        let a = s.add_source("local", "A", "/a").unwrap();
+        let b = s.add_source("local", "B", "/b").unwrap();
+        let c = s.add_source("local", "C", "/c").unwrap();
+        let names = |s: &Store| -> Vec<String> {
+            s.sources().unwrap().into_iter().map(|x| x.name).collect()
+        };
+        assert_eq!(names(&s), ["A", "B", "C"]);
+
+        s.set_source_order(&[c, a, b]).unwrap();
+        assert_eq!(names(&s), ["C", "A", "B"]);
+
+        s.set_source_favorite(b, true).unwrap();
+        assert_eq!(names(&s), ["B", "C", "A"]);
+        assert!(s.sources().unwrap()[0].favorite);
+
+        s.rename_source(a, "Films").unwrap();
+        assert_eq!(names(&s), ["B", "C", "Films"]);
+
+        // Hidden from Home, but still listed, in its place.
+        assert!(!s.sources().unwrap()[1].hidden);
+        s.set_source_hidden(c, true).unwrap();
+        assert!(s.sources().unwrap()[1].hidden);
+        assert_eq!(names(&s), ["B", "C", "Films"]);
+
+        // A source added later goes after the ordered ones.
+        s.add_source("local", "D", "/d").unwrap();
+        assert_eq!(names(&s), ["B", "C", "Films", "D"]);
+    }
+
+    #[test]
+    fn favourite_folders_roundtrip_and_go_with_their_source() {
+        let s = store();
+        let src = s.add_source("local", "TV", "/tv").unwrap();
+        s.set_folder_favorite(src, &p("Show/Season 2"), true)
+            .unwrap();
+        s.set_folder_favorite(src, &p("Other"), true).unwrap();
+        s.set_folder_favorite(src, &p("Other"), true).unwrap();
+        assert!(s.is_favorite_folder(src, &p("Other")).unwrap());
+        assert!(!s.is_favorite_folder(src, &p("Show")).unwrap());
+        let favs = s.favorite_folders().unwrap();
+        assert_eq!(favs, [(src, p("Show/Season 2")), (src, p("Other"))]);
+
+        s.set_folder_favorite(src, &p("Other"), false).unwrap();
+        assert_eq!(s.favorite_folders().unwrap().len(), 1);
+        s.remove_source(src).unwrap();
+        assert!(s.favorite_folders().unwrap().is_empty());
+    }
+
+    #[test]
     fn progress_saves_never_mark_watched() {
         let s = Store::open_in_memory().unwrap();
         let src = s.add_source("local", "M", "/m").unwrap();
@@ -739,7 +893,8 @@ mod tests {
 
         let all = s.sources().unwrap();
         assert_eq!(all.len(), 2);
-        assert_eq!(all[0].name, "Films");
+        // Adding it again keeps the name, which may be the user's.
+        assert_eq!(all[0].name, "Movies");
         assert_eq!(all[1].location, r"\\nas\tv");
 
         s.remove_source(a).unwrap();

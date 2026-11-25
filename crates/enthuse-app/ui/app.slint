@@ -11,12 +11,15 @@ import { BrowserModel, BrowserPage, Toast } from "browser.slint";
 import { HomeModel, HomePage } from "home.slint";
 import { PlayerModel, PlayerPage } from "player.slint";
 import { SettingsModel, SettingsPage } from "settings.slint";
+import { LibrariesModel, LibraryDialog } from "libraries.slint";
 import { RecentModel, RecentPage } from "recent.slint";
 
 export { BrowserModel, BrowserItem, ItemKind, ItemBadge } from "browser.slint";
 export { HomeModel, ContinueItem, SourceTileItem, SourceIcon } from "home.slint";
 export { PlayerModel, PlayerLayout, TrackItem } from "player.slint";
 export { SettingsModel, OverrideItem } from "settings.slint";
+export { LibrariesModel, LibraryItem } from "libraries.slint";
+export { SidebarModel } from "components/sidebar.slint";
 export { RecentModel } from "recent.slint";
 
 export { Section }
@@ -481,6 +484,13 @@ component AppScreens inherits Rectangle {
     changed view-mode => { KeyFocus.restore(); }
     changed loading => { KeyFocus.restore(); }
     changed at-sources => { KeyFocus.restore(); }
+    // Closing a library's dialog destroys what had focus in it.
+    property <bool> editing: LibrariesModel.editing;
+    changed editing => {
+        if (!self.editing) {
+            KeyFocus.restore();
+        }
+    }
 
 
     Shell {
@@ -491,6 +501,14 @@ component AppScreens inherits Rectangle {
                 HomeModel.open-source(index);
                 root.section = Section.browse;
             }
+            open-favorite(index) => {
+                HomeModel.open-favorite(index);
+                root.section = Section.browse;
+            }
+            manage-libraries => {
+                HomeModel.show-libraries();
+                root.section = Section.browse;
+            }
         }
 
         if root.section == Section.browse: BrowserPage { }
@@ -499,6 +517,9 @@ component AppScreens inherits Rectangle {
 
         if root.section == Section.settings: SettingsPage { }
     }
+
+    // Over everything, sidebar too.
+    if LibrariesModel.editing: LibraryDialog { }
 
     Toast { }
 

@@ -17,7 +17,7 @@ export struct ContinueItem {
     thumbnail: image,
 }
 
-export enum SourceIcon { drive, server, library }
+export enum SourceIcon { drive, server, library, folder }
 
 export struct SourceTileItem {
     name: string,
@@ -27,18 +27,27 @@ export struct SourceTileItem {
     kind-label: string,
     icon: SourceIcon,
     offline: bool,
+    // A library listed first (#59).
+    favorite: bool,
+    // A tile in the Favourites row: its menu only unstars it.
+    folder: bool,
 }
 
 export global HomeModel {
     in property <[ContinueItem]> continue-items;
     in property <[SourceTileItem]> sources;
+    // Favourite folders inside libraries.
+    in property <[SourceTileItem]> favorites;
     // False until the sources are known, so first run doesn't flash.
     in property <bool> loaded;
 
     callback play(int);
     callback open-source(int);
-    callback remove-source(int);
-    callback add-source();
+    callback toggle-favorite(int);
+    callback open-favorite(int);
+    callback remove-favorite(int);
+    // Show the Libraries page, where libraries are arranged.
+    callback show-libraries();
     // Asks Rust to load the lists again, e.g. when Home shows.
     callback refresh();
 }
@@ -144,11 +153,66 @@ component ContinueCard inherits Rectangle {
     }
 }
 
+// One row of a tile's menu.
+component MenuItem inherits Rectangle {
+    in property <string> text;
+    in property <image> icon;
+    in property <bool> danger;
+    callback clicked();
+
+    height: Theme.touch-target;
+    border-radius: Theme.radius-small;
+    background: item-behavior.has-hover ? Theme.line-strong : transparent;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-action-default => { root.clicked(); }
+
+    HorizontalLayout {
+        padding-left: Theme.space-12;
+        padding-right: Theme.space-12;
+        spacing: Theme.space-12;
+
+        Image {
+            width: Theme.icon-size;
+            source: root.icon;
+            colorize: root.danger ? Theme.danger : Theme.text-muted;
+            image-fit: contain;
+        }
+
+        Text {
+            text: root.text;
+            color: Theme.text;
+            font-size: Theme.label-size;
+            vertical-alignment: center;
+        }
+    }
+
+    item-behavior := ButtonBehavior {
+        ring-radius: Theme.radius-small;
+        clicked => { root.clicked(); }
+    }
+}
+
 component SourceTile inherits Rectangle {
     in property <SourceTileItem> item;
     callback clicked();
+    // From the Favourites row: unstar it.
     callback remove();
+    callback toggle-favorite();
+    // Open Settings, where libraries are arranged.
+    callback manage();
     callback arrow(string) -> bool;
+    // Bottom of the visible area, in window coordinates. Popups that would
+    // not fit below the tile open above it.
+    in property <length> viewport-bottom: 1000000px;
+
+
+    // Fits "Remove from favourites" with its icon.
+    property <length> menu-width: 264px;
+    property <int> menu-items: root.item.folder ? 1 : 2;
+    property <length> menu-height: root.menu-items * Theme.touch-target + 2 * Theme.space-4 + 2px;
+    property <bool> menu-up: root.absolute-position.y + more.y + more.height + Theme.space-4 + root.menu-height > root.viewport-bottom - Theme.space-16;
+
 
     height: 84px;
     border-radius: Theme.radius-large;
@@ -181,7 +245,7 @@ component SourceTile inherits Rectangle {
             Image {
                 width: Theme.icon-size;
                 height: Theme.icon-size;
-                source: root.item.icon == SourceIcon.server ? Icons.server : root.item.icon == SourceIcon.library ? Icons.library : Icons.drive;
+                source: root.item.icon == SourceIcon.server ? Icons.server : root.item.icon == SourceIcon.library ? Icons.library : root.item.icon == SourceIcon.folder ? Icons.folder : Icons.drive;
                 colorize: Theme.accent;
             }
         }
@@ -208,7 +272,18 @@ component SourceTile inherits Rectangle {
             }
         }
 
-        Rectangle {
+        if root.item.favorite: Image {
+            width: Theme.icon-size;
+            height: Theme.icon-size;
+            horizontal-stretch: 0;
+            y: (parent.height - self.height) / 2;
+            source: Icons.star-filled;
+            colorize: Theme.accent;
+            accessible-role: image;
+            accessible-label: "Favourite";
+        }
+
+        if !root.item.folder: Rectangle {
             width: chip-text.preferred-width + 2 * Theme.space-12;
             height: 28px;
             horizontal-stretch: 0;
@@ -248,9 +323,9 @@ component SourceTile inherits Rectangle {
     }
 
     menu := PopupWindow {
-        x: more.x + more.width - 200px;
-        y: more.y + more.height + Theme.space-4;
-        width: 200px;
+        x: more.x + more.width - root.menu-width;
+        y: root.menu-up ? more.y - Theme.space-4 - root.menu-height : more.y + more.height + Theme.space-4;
+        width: root.menu-width;
 
         Rectangle {
             border-radius: Theme.radius-medium;
@@ -263,39 +338,32 @@ component SourceTile inherits Rectangle {
             VerticalLayout {
                 padding: Theme.space-4;
 
-                Rectangle {
-                    height: Theme.touch-target;
-                    border-radius: Theme.radius-small;
-                    background: remove-behavior.has-hover ? Theme.line-strong : transparent;
-                    accessible-role: button;
-                    accessible-label: "Remove source";
-                    accessible-action-default => { root.remove(); }
-
-                    HorizontalLayout {
-                        padding-left: Theme.space-12;
-                        spacing: Theme.space-12;
-
-                        Image {
-                            width: Theme.icon-size;
-                            source: Icons.close;
-                            colorize: Theme.danger;
-                            image-fit: contain;
-                        }
-
-                        Text {
-                            text: "Remove source";
-                            color: Theme.text;
-                            font-size: Theme.label-size;
-                            vertical-alignment: center;
-                        }
+                if !root.item.folder: MenuItem {
+                    text: root.item.favorite ? "Remove from favourites" : "Add to favourites";
+                    icon: root.item.favorite ? Icons.star-filled : Icons.star;
+                    clicked => {
+                        // Before closing: closing drops the rest of this handler.
+                        root.toggle-favorite();
+                        menu.close();
                     }
+                }
 
-                    remove-behavior := ButtonBehavior {
-                        ring-radius: Theme.radius-small;
-                        clicked => {
-                            menu.close();
-                            root.remove();
-                        }
+                if !root.item.folder: MenuItem {
+                    text: "Manage libraries…";
+                    icon: Icons.settings;
+                    clicked => {
+                        root.manage();
+                        menu.close();
+                    }
+                }
+
+                if root.item.folder: MenuItem {
+                    text: "Remove from favourites";
+                    icon: Icons.close;
+                    danger: true;
+                    clicked => {
+                        root.remove();
+                        menu.close();
                     }
                 }
             }
@@ -305,11 +373,14 @@ component SourceTile inherits Rectangle {
 
 export component HomePage inherits Rectangle {
     callback open-source(int);
+    callback open-favorite(int);
+    // Libraries are arranged in Settings.
+    callback manage-libraries();
 
     // Arrow keys move within the cards and within the tiles; Up from the
     // tiles goes to the cards and Down from the cards to the tiles. The
     // item to focus is asked for by bumping the serial.
-    property <int> focus-group; // 0 cards, 1 tiles
+    property <int> focus-group; // 0 cards, 1 tiles, 2 favourites
     property <int> focus-target: -1;
     property <int> focus-serial;
     property <int> first-serial: KeyFocus.first-serial;
@@ -338,6 +409,8 @@ export component HomePage inherits Rectangle {
 
     property <length> pad: root.width < 700px ? Theme.space-24 : Theme.content-padding-x;
     property <length> gap: Theme.space-24;
+
+
 
     scroll := ScrollView {
         property <length> inner: self.visible-width - 2 * root.pad;
@@ -388,7 +461,9 @@ export component HomePage inherits Rectangle {
                             }
                         }
                         arrow(k) => {
-                            if (k == Key.DownArrow && HomeModel.sources.length > 0) {
+                            if (k == Key.DownArrow && HomeModel.favorites.length > 0) {
+                                root.move-to(2, 0);
+                            } else if (k == Key.DownArrow && HomeModel.sources.length > 0) {
                                 root.move-to(1, 0);
                             } else {
                                 root.move-to(0, FocusGrid.target(index, scroll.card-count, scroll.card-count, k));
@@ -404,19 +479,62 @@ export component HomePage inherits Rectangle {
                 }
             }
 
+            if HomeModel.loaded && HomeModel.favorites.length > 0: VerticalLayout {
+                spacing: Theme.space-16;
+
+                SectionHeading {
+                    text: "Favourites";
+                }
+
+                Rectangle {
+                    property <int> rows: ceil(HomeModel.favorites.length / scroll.tile-columns);
+                    height: self.rows * 84px + max(0, self.rows - 1) * root.gap;
+
+                    for tile[index] in HomeModel.favorites: SourceTile {
+                        property <int> serial: root.focus-serial;
+                        changed serial => {
+                            if (root.focus-group == 2 && index == root.focus-target) {
+                                root.reveal(self.absolute-position.y - scroll.absolute-position.y, self.height);
+                                self.focus();
+                            }
+                        }
+                        arrow(k) => {
+                            if (k == Key.UpArrow && index < scroll.tile-columns && HomeModel.continue-items.length > 0) {
+                                root.move-to(0, 0);
+                            } else if (k == Key.DownArrow && index + scroll.tile-columns >= HomeModel.favorites.length && HomeModel.sources.length > 0) {
+                                root.move-to(1, 0);
+                            } else {
+                                root.move-to(2, FocusGrid.target(index, HomeModel.favorites.length, scroll.tile-columns, k));
+                            }
+                            return true;
+                        }
+                        x: mod(index, scroll.tile-columns) * (scroll.tile-width + root.gap);
+                        y: floor(index / scroll.tile-columns) * (84px + root.gap);
+                        width: scroll.tile-width;
+                        viewport-bottom: scroll.absolute-position.y + scroll.visible-height;
+                        item: tile;
+                        clicked => { root.open-favorite(index); }
+                        remove => { HomeModel.remove-favorite(index); }
+                    }
+                }
+            }
+
             if HomeModel.loaded && HomeModel.sources.length > 0: VerticalLayout {
                 spacing: Theme.space-16;
 
                 HorizontalLayout {
+                    spacing: Theme.space-12;
+
                     SectionHeading {
-                        text: "Sources";
+                        text: "Libraries";
                     }
 
                     PillButton {
-                        icon: Icons.add;
-                        text: "Add source";
-                        clicked => { HomeModel.add-source(); }
+                        icon: Icons.settings;
+                        text: "Manage";
+                        clicked => { root.manage-libraries(); }
                     }
+
                 }
 
                 Rectangle {
@@ -432,7 +550,9 @@ export component HomePage inherits Rectangle {
                             }
                         }
                         arrow(k) => {
-                            if (k == Key.UpArrow && index < scroll.tile-columns && HomeModel.continue-items.length > 0) {
+                            if (k == Key.UpArrow && index < scroll.tile-columns && HomeModel.favorites.length > 0) {
+                                root.move-to(2, 0);
+                            } else if (k == Key.UpArrow && index < scroll.tile-columns && HomeModel.continue-items.length > 0) {
                                 root.move-to(0, 0);
                             } else {
                                 root.move-to(1, FocusGrid.target(index, HomeModel.sources.length, scroll.tile-columns, k));
@@ -442,9 +562,11 @@ export component HomePage inherits Rectangle {
                         x: mod(index, scroll.tile-columns) * (scroll.tile-width + root.gap);
                         y: floor(index / scroll.tile-columns) * (84px + root.gap);
                         width: scroll.tile-width;
+                        viewport-bottom: scroll.absolute-position.y + scroll.visible-height;
                         item: tile;
                         clicked => { root.open-source(index); }
-                        remove => { HomeModel.remove-source(index); }
+                        toggle-favorite => { HomeModel.toggle-favorite(index); }
+                        manage => { root.manage-libraries(); }
                     }
                 }
             }
@@ -462,7 +584,7 @@ export component HomePage inherits Rectangle {
                     spacing: Theme.space-20;
 
                     Text {
-                        text: "Add a folder or network share to get started";
+                        text: "Add a folder or network share under Libraries to get started";
                         color: Theme.text;
                         font-size: Theme.section-size;
                         font-weight: Theme.section-weight;
@@ -476,9 +598,9 @@ export component HomePage inherits Rectangle {
                         PillButton {
                             size: 48px;
                             variant: ButtonVariant.primary;
-                            icon: Icons.add;
-                            text: "Add source";
-                            clicked => { HomeModel.add-source(); }
+                            icon: Icons.library;
+                            text: "Open Libraries";
+                            clicked => { root.manage-libraries(); }
                         }
                     }
                 }

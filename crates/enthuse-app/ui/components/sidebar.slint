@@ -12,6 +12,13 @@ export enum Section {
     settings,
 }
 
+// Filled in by Rust for each window.
+export global SidebarModel {
+    // Libraries was clicked while already showing: go to the list of
+    // libraries, out of the folder being browsed.
+    callback show-libraries();
+}
+
 // Our own mark: the accent square with a play glyph.
 export component Logo inherits Rectangle {
     width: 32px;
@@ -75,12 +82,19 @@ export component Sidebar inherits Rectangle {
             arrow(k) => { if (k == Key.DownArrow) { nav-browse.focus(); } return k == Key.UpArrow || k == Key.DownArrow; }
         }
 
+        // The libraries and the folders in them (#59). From elsewhere it
+        // goes back to the folder last browsed; clicked again, to the list.
         nav-browse := NavItem {
-            icon: Icons.folder;
-            text: "Browse";
+            icon: Icons.library;
+            text: "Libraries";
             compact: root.compact;
             active: root.section == Section.browse;
-            clicked => { root.navigate(Section.browse); }
+            clicked => {
+                if (root.section == Section.browse) {
+                    SidebarModel.show-libraries();
+                }
+                root.navigate(Section.browse);
+            }
             arrow(k) => { if (k == Key.UpArrow) { nav-home.focus(); return true; } if (k == Key.DownArrow) { nav-recent.focus(); return true; } return false; }
         }
 

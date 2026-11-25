@@ -34,7 +34,7 @@ Sizes are logical pixels. Every interactive component has the states listed unde
 | Component | Size | Content and notes |
 | --- | --- | --- |
 | `NavItem` | 48px high, full sidebar width minus 32px | Icon 20px + label. Active: `surface-raised` background, `text`, weight 600. Inactive: transparent, `text-muted`. |
-| `Sidebar` | 232px wide | Logo and app name, NavItems (Home, Browse, Recent), spacer, Settings at the bottom. |
+| `Sidebar` | 232px wide | Logo and app name, NavItems (Home, Libraries, Recent), spacer, Settings at the bottom. |
 | `IconButton` | 44px round (48px over video) | Outline variant (`line-strong` border) on app screens, filled variant (`overlay-button`) over video. Needs an accessible label. |
 | `PillButton` | 40 to 48px high | Variants: primary (accent fill, `on-accent` text), outline, overlay. Optional leading icon. |
 | `SegmentedControl` | 44px high | List or grid view. Selected segment `line-strong`, others transparent with `text-muted` icon. |
@@ -55,14 +55,21 @@ Sizes are logical pixels. Every interactive component has the states listed unde
 Sidebar, then:
 1. Title "Home" and a search button.
 2. "Continue watching": up to 4 cards in one row, most recent first. Hidden when empty.
-3. "Sources" with an "Add source" button: grid of SourceTiles, 3 per row.
+3. "Favourites", when there are any: starred libraries, then starred folders (with "Library / parent" under the name), as SourceTiles. Hidden when empty.
+4. "Libraries" with a "Manage" button (to the Libraries page): grid of SourceTiles, 3 per row, favourites first, then the user's order. Libraries hidden from Home (the eye on the Libraries page) are left out of Home altogether, Favourites too.
 
-Tapping a card resumes playback. Tapping a source opens the folder browser at its root.
+Tapping a card resumes playback. Tapping a library opens it in the folder browser. A library tile's menu has "Add to / Remove from favourites" and "Manage libraries…"; a Favourites tile's menu only unstars it. Home is for watching and browsing: adding and arranging libraries happens on the Libraries page.
+
+### Libraries
+
+The sidebar's Libraries item opens the list of all libraries, also those left off Home, with "Add library": a path field (folder, mount or `\\server\share`), "Browse…" for the system folder dialog, and "Open". Libraries are arranged here. Each row has a drag handle, its name and path, a star, an eye (shown on Home, or crossed out when left off), up and down buttons (within its group: favourites stay first) and a settings button. Tapping the row opens the folder browser at its root. Drag the handle to reorder; with a finger, rest on it a moment first, since a quick swipe scrolls the list.
+
+The settings button opens the library's dialog over a scrim: its name (empty goes back to the folder's name), its own "Resume where you left off" (Same as Playback, On, Off), and "Remove library", which asks again since it forgets the watch state. Changes save at once, the name on Done or Enter. Escape, the scrim or Done close it. Later sources (SMB address and credentials) add their settings here. Coming back to Libraries from another section returns to the folder last browsed; clicking it again while there goes to the list. A library just added opens right away.
 
 ### Folder browser
 
 Sidebar, then:
-1. Header: back button, breadcrumb, list or grid toggle, sort button ("Sort: Name", natural sort by default).
+1. Header: back button, breadcrumb, a star (the folder shown as a favourite; at a library's root, the library), list or grid toggle, sort button ("Sort: Name", natural sort by default).
 2. Folder title and summary ("8 episodes, 4 watched").
 3. Primary action on the right: "Resume episode N" when a file in the folder has a resume position, else "Play next: E06" for the first unwatched file, else "Play from start". Hidden when the folder has no video files.
 4. File list: folders first, then video files, in natural order. Non-video files are hidden.
@@ -131,14 +138,14 @@ Every change is saved at once; there is no Save button.
 | Disabled | 40% opacity, no hover. |
 | Loading a folder | Keep the header, show 6 placeholder rows (`surface`, no shimmer). Show them only if loading takes over 150ms. |
 | Empty folder | Centered message "No videos in this folder" in `text-muted`, with a "Back" button. |
-| No sources yet (first run) | Home shows one large prompt in place of the sources grid: "Add a folder or network share to get started" with the "Add source" primary button. Continue watching is hidden. |
+| No libraries yet (first run) | Home shows one large prompt in place of the libraries grid: "Add a folder or network share under Libraries to get started" with an "Open Libraries" primary button. Continue watching is hidden. |
 | Source offline or unreachable | Tile shows the kind chip as "Offline" and dimmed content. Opening it shows "Can't reach NAS media" with "Retry" and "Edit source". |
 | Credentials needed (SMB) | Dialog with user name, password, "Remember" and "Connect" (see #21). |
 | File missing or failed to open | Toast at the bottom: "Couldn't play E05" with the reason from the player, and the browser stays where it was. |
 | Playback error mid-file | Overlay stays visible with the message and "Retry" and "Back". |
 | Buffering | 32px spinner in the center over the video; controls stay usable. |
 | Long names | Titles ellipsize at the end on one line. Resting the pointer on the row for 0.7 s shows the full name in a tooltip under it (`TipText`). The tip is drawn by a layer over the screens, so it never catches clicks. |
-| Narrow window | Below 900px wide the sidebar collapses to a 72px icon rail, Continue watching shows 2 or 3 cards, sources 2 per row. |
+| Narrow window | Below 900px wide the sidebar collapses to a 72px icon rail, Continue watching shows 2 or 3 cards, libraries 2 per row. |
 
 ## Slint notes
 
