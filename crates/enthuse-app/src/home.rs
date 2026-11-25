@@ -1,4 +1,5 @@
-//! Home screen: "Continue watching" and the sources (docs/ui.md, "Home").
+//! Home screen: "Continue watching", favourite folders and the sources
+//! (docs/ui.md, "Home").
 //! Fills `HomeModel` in both windows, so Home looks the same in the
 //! browser window during PiP.
 
@@ -12,7 +13,7 @@ use enthuse_core::source::{SourcePath, is_network_location};
 use enthuse_core::storage::{SourceId, Store};
 use slint::{ComponentHandle, Model, ModelRc, VecModel, Weak};
 
-use crate::browser::{Browser, SourceRef};
+use crate::browser::{Browser, Library, SourceRef};
 use crate::nav::Nav;
 use crate::thumbs::{Thumbs, thumb_id};
 use crate::{AppWindow, BrowserWindow, ContinueItem, HomeModel, SourceIcon, SourceTileItem, bg};
@@ -33,6 +34,8 @@ pub struct Home {
     thumbs: RefCell<Option<Rc<Thumbs>>>,
     /// Shown source tiles, for marking offline ones when the check returns.
     tiles: Rc<VecModel<SourceTileItem>>,
+    /// What each favourite folder tile opens.
+    favorites: RefCell<Vec<(SourceId, SourcePath)>>,
     /// Last reachability result per source: true when offline.
     offline: RefCell<HashMap<SourceId, bool>>,
     /// Sources whose reachability check is still running. A dead share can
@@ -59,6 +62,54 @@ macro_rules! wire_callbacks {
         });
         let h = $home.clone();
         model.on_add_source(move || h.pick_folder());
+        // These rebuild the tiles, so they also wait for the click to end.
+        let h = $home.clone();
+        model.on_toggle_favorite(move |i| {
+            let h = h.clone();
+            slint::Timer::single_shot(Duration::ZERO, move || {
+                let index = i as usize;
+                let favorite = h.browser.sources().get(index).is_some_and(|s| s.favorite);
+                h.browser.set_source_favorite(index, !favorite);
+            });
+        });
+        let h = $home.clone();
+        model.on_rename_source(move |i, name| {
+            let h = h.clone();
+            slint::Timer::single_shot(Duration::ZERO, move || {
+                h.browser.rename_source(i as usize, &name)
+            });
+        });
+        let h = $home.clone();
+        model.on_move_source(move |i, later| {
+            let h = h.clone();
+            slint::Timer::single_shot(Duration::ZERO, move || {
+                h.browser.move_source(i as usize, later)
+            });
+        });
+        let h = $home.clone();
+        model.on_drop_source(move |from, to| {
+            let h = h.clone();
+            slint::Timer::single_shot(Duration::ZERO, move || {
+                h.browser.drop_source(from as usize, to as usize)
+            });
+        });
+        let h = $home.clone();
+        model.on_open_favorite(move |i| {
+            let favorite = h.favorites.borrow().get(i as usize).cloned();
+            if let Some((id, path)) = favorite {
+                h.browser.open_folder(id, path);
+            }
+        });
+        let h = $home.clone();
+        model.on_remove_favorite(move |i| {
+            let h = h.clone();
+            slint::Timer::single_shot(Duration::ZERO, move || {
+                let favorite = h.favorites.borrow().get(i as usize).cloned();
+                if let Some((id, path)) = favorite {
+                    h.browser.remove_favorite(id, &path);
+                }
+            });
+        });
         let h = $home.clone();
         model.on_refresh(move || h.refresh());
     }};
@@ -76,6 +127,7 @@ impl Home {
             cards: Rc::new(VecModel::default()),
             thumbs: Default::default(),
             tiles: Rc::new(VecModel::default()),
+            favorites: Default::default(),
             offline: Default::default(),
             checking: Default::default(),
             picking: Cell::new(false),
@@ -178,23 +230,34 @@ impl Home {
         *self.items.borrow_mut() = items;
 
         let sources = self.browser.sources();
-        let tiles: Vec<_> = {
+        let favorite_count = sources.iter().filter(|s| s.favorite).count() as i32;
+        let tiles: Vec<_> = (0..sources.len()).map(|i| self.tile(&sources, i)).collect();
+        self.tiles.set_vec(tiles);
+
+        let favorites = self.browser.favorites();
+        let favorite_tiles: Vec<_> = {
             let offline = self.offline.borrow();
-            sources
+            favorites
                 .iter()
-                .map(|(s, location)| {
-                    let offline = offline.get(&s.id).copied().unwrap_or(false);
-                    tile(&s.source.display_name(), location, offline)
+                .map(|(library, path)| {
+                    let offline = offline.get(&library.source.id).copied().unwrap_or(false);
+                    folder_tile(library, path, offline)
                 })
                 .collect()
         };
-        self.tiles.set_vec(tiles);
+        *self.favorites.borrow_mut() = favorites
+            .into_iter()
+            .map(|(library, path)| (library.source.id, path))
+            .collect();
 
         self.cards.set_vec(cards);
         let cards = ModelRc::from(self.cards.clone());
         let tiles = ModelRc::from(self.tiles.clone());
+        let favorite_tiles = ModelRc::new(VecModel::from(favorite_tiles));
         self.each_model(|m| {
             m.set_continue_items(cards.clone());
+            m.set_favorites(favorite_tiles.clone());
+            m.set_favorite_count(favorite_count);
             m.set_sources(tiles.clone());
             m.set_loaded(true);
         });
@@ -202,7 +265,7 @@ impl Home {
         // Check again whether each source can be listed (an unplugged
         // drive, a share that is down). Listing can hang on a dead share,
         // so it runs off the UI thread, one check per source at a time.
-        for (source, _) in sources {
+        for Library { source, .. } in sources {
             if !self.checking.borrow_mut().insert(source.id) {
                 continue;
             }
@@ -225,7 +288,7 @@ impl Home {
         self.offline.borrow_mut().insert(id, offline);
         // Find the tile by id: sources may have changed since the check began.
         let sources = self.browser.sources();
-        let Some(index) = sources.iter().position(|(s, _)| s.id == id) else {
+        let Some(index) = sources.iter().position(|s| s.source.id == id) else {
             return;
         };
         if self
@@ -233,10 +296,24 @@ impl Home {
             .row_data(index)
             .is_some_and(|t| t.offline != offline)
         {
-            let (source, location) = &sources[index];
-            let name = source.source.display_name();
-            self.tiles
-                .set_row_data(index, tile(&name, location, offline));
+            self.tiles.set_row_data(index, self.tile(&sources, index));
+        }
+    }
+
+    /// The tile of the library at `index` in `sources`.
+    fn tile(&self, sources: &[Library], index: usize) -> SourceTileItem {
+        let library = &sources[index];
+        let offline = self
+            .offline
+            .borrow()
+            .get(&library.source.id)
+            .copied()
+            .unwrap_or(false);
+        SourceTileItem {
+            favorite: library.favorite,
+            can_move_earlier: self.browser.can_move_source(index, false),
+            can_move_later: self.browser.can_move_source(index, true),
+            ..tile(&library.source.name, &library.location, offline)
         }
     }
 
@@ -304,5 +381,36 @@ fn tile(name: &str, location: &str, offline: bool) -> SourceTileItem {
             SourceIcon::Drive
         },
         offline,
+        favorite: false,
+        can_move_earlier: false,
+        can_move_later: false,
+        folder: false,
+    }
+}
+
+/// The tile in the Favourites row: a library (its root), or a folder with
+/// where it is.
+fn folder_tile(library: &Library, path: &SourcePath, offline: bool) -> SourceTileItem {
+    if path.is_root() {
+        return SourceTileItem {
+            kind_label: Default::default(),
+            folder: true,
+            ..tile(&library.source.name, &library.location, offline)
+        };
+    }
+    let place = std::iter::once(library.source.name.as_str())
+        .chain(path.parent().iter().flat_map(|p| p.segments()))
+        .collect::<Vec<_>>()
+        .join(" / ");
+    SourceTileItem {
+        name: path.name().unwrap_or(&library.source.name).into(),
+        detail: place.into(),
+        kind_label: Default::default(),
+        icon: SourceIcon::Folder,
+        offline,
+        favorite: false,
+        can_move_earlier: false,
+        can_move_later: false,
+        folder: true,
     }
 }

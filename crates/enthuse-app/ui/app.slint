@@ -491,6 +491,10 @@ component AppScreens inherits Rectangle {
                 HomeModel.open-source(index);
                 root.section = Section.browse;
             }
+            open-favorite(index) => {
+                HomeModel.open-favorite(index);
+                root.section = Section.browse;
+            }
         }
 
         if root.section == Section.browse: BrowserPage { }

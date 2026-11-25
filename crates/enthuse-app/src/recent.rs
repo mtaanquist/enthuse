@@ -128,7 +128,7 @@ impl Recent {
             let badge = badge(&state);
             rows.push(BrowserItem {
                 label: title(name).into(),
-                detail: detail(&source.source.display_name(), &path, at, now).into(),
+                detail: detail(&source.name, &path, at, now).into(),
                 kind: ItemKind::Video,
                 badge: match badge {
                     Badge::Watched => ItemBadge::Watched,

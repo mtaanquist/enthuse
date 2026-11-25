@@ -39,6 +39,18 @@ pub fn migrations() -> Migrations<'static> {
                 PRIMARY KEY (source_id, path)
             );",
         ),
+        // 3: libraries (#59): favourites listed first, the user's order
+        // (NULL: in the order added), and favourite folders inside them.
+        M::up(
+            "ALTER TABLE sources ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE sources ADD COLUMN sort_order INTEGER;
+            CREATE TABLE favorite_folders (
+                source_id  INTEGER NOT NULL REFERENCES sources (id) ON DELETE CASCADE,
+                path       TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                PRIMARY KEY (source_id, path)
+            );",
+        ),
     ])
 }
 

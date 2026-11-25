@@ -47,6 +47,10 @@ export global BrowserModel {
     in property <string> sort-label: "Sort: Name";
     // A folder that was dropped or opened without adding it as a library.
     in property <bool> unsaved;
+    // The folder shown can be a favourite (inside a library), and is one.
+    // At a library's root, that is the library itself.
+    in property <bool> can-favorite;
+    in property <bool> favorite;
     // 0 = list, 1 = grid.
     in-out property <int> view-mode;
 
@@ -62,6 +66,7 @@ export global BrowserModel {
     callback retry();
     // Save the folder shown, opened without a library, as a library.
     callback add-library();
+    callback toggle-favorite();
 }
 
 // Path segments separated by "/". When too long, it is cut off on the left
@@ -501,6 +506,12 @@ export component BrowserPage inherits Rectangle {
             Breadcrumb {
                 crumbs: BrowserModel.crumbs;
                 clicked(i) => { BrowserModel.crumb(i); }
+            }
+
+            if BrowserModel.can-favorite: IconButton {
+                icon: BrowserModel.favorite ? Icons.star-filled : Icons.star;
+                label: BrowserModel.favorite ? "Remove from favourites" : "Add to favourites";
+                clicked => { BrowserModel.toggle-favorite(); }
             }
 
             SegmentedControl {

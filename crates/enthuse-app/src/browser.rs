@@ -8,6 +8,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use enthuse_core::folder::{Badge, FolderView, SortOrder};
+use enthuse_core::library::{drop_target, library_name, move_target};
 use enthuse_core::settings::cycle;
 use enthuse_core::source::{
     COMPUTER_NAME, Computer, Entry, EntryKind, LocalFs, Source, SourceError, SourcePath,
@@ -34,15 +35,21 @@ const COMPUTER: &str = "computer";
 pub struct SourceRef {
     pub id: SourceId,
     pub source: Arc<dyn Source>,
+    /// The name it is shown with, which the user can change (#59).
+    pub name: String,
 }
 
 /// Called when the user picks a video.
 pub type PlayHandler = Box<dyn Fn(SourceRef, SourcePath)>;
 
-struct SourceSlot {
-    source: SourceRef,
+/// A saved library, as listed.
+#[derive(Clone)]
+pub struct Library {
+    pub source: SourceRef,
     /// Shown under the name, e.g. the folder path.
-    location: String,
+    pub location: String,
+    /// Listed first (#59).
+    pub favorite: bool,
 }
 
 /// A source the browser can be in.
@@ -109,6 +116,8 @@ macro_rules! wire_callbacks {
         let b = $browser.clone();
         model.on_add_library(move || b.save_unsaved());
         let b = $browser.clone();
+        model.on_toggle_favorite(move || b.toggle_favorite());
+        let b = $browser.clone();
         model.on_add_source(move |path| {
             if let Some(index) = b.add_local(path.trim()) {
                 b.navigate(Location::Folder {
@@ -123,7 +132,7 @@ macro_rules! wire_callbacks {
 pub struct Browser {
     view: RefCell<View>,
     store: Rc<Store>,
-    sources: RefCell<Vec<SourceSlot>>,
+    sources: RefCell<Vec<Library>>,
     /// Files outside any library, by absolute path. `None` if the database
     /// could not save it; such files then cannot be opened.
     computer: Option<SourceRef>,
@@ -154,6 +163,7 @@ impl Browser {
             Ok(id) => Some(SourceRef {
                 id,
                 source: Arc::new(Computer),
+                name: COMPUTER_NAME.to_owned(),
             }),
             Err(err) => {
                 eprintln!("enthuse: cannot save files outside libraries: {err}");
@@ -259,13 +269,188 @@ impl Browser {
         }
     }
 
-    /// The saved sources in display order, each with its location.
-    pub fn sources(&self) -> Vec<(SourceRef, String)> {
-        self.sources
+    /// The saved libraries in display order.
+    pub fn sources(&self) -> Vec<Library> {
+        self.sources.borrow().clone()
+    }
+
+    /// Renames the library at `index`; an empty name goes back to the
+    /// folder's own name.
+    pub fn rename_source(self: &Rc<Self>, index: usize, name: &str) {
+        let Some(library) = self.sources.borrow().get(index).cloned() else {
+            return;
+        };
+        let name = library_name(name, &library.source.source.display_name());
+        if let Err(err) = self.store.rename_source(library.source.id, &name) {
+            self.show_error(&format!("Cannot rename this library: {err}"));
+        }
+        self.reload_sources();
+    }
+
+    /// Makes the library at `index` a favourite, listed first, or not.
+    pub fn set_source_favorite(self: &Rc<Self>, index: usize, favorite: bool) {
+        let Some(id) = self.sources.borrow().get(index).map(|s| s.source.id) else {
+            return;
+        };
+        if let Err(err) = self.store.set_source_favorite(id, favorite) {
+            self.show_error(&format!("Cannot save this favourite: {err}"));
+        }
+        self.reload_sources();
+    }
+
+    /// Whether the library at `index` can move one place earlier or
+    /// `later`: not past either end of its group (favourites or the rest).
+    pub fn can_move_source(&self, index: usize, later: bool) -> bool {
+        let favorites: Vec<bool> = self.sources.borrow().iter().map(|s| s.favorite).collect();
+        move_target(&favorites, index, later).is_some()
+    }
+
+    /// Moves the library at `index` one place earlier or `later`.
+    pub fn move_source(self: &Rc<Self>, index: usize, later: bool) {
+        let favorites: Vec<bool> = self.sources.borrow().iter().map(|s| s.favorite).collect();
+        if let Some(target) = move_target(&favorites, index, later) {
+            self.reorder(index, target);
+        }
+    }
+
+    /// Puts the library dragged from `from` at `to`, within its group.
+    pub fn drop_source(self: &Rc<Self>, from: usize, to: usize) {
+        let favorites: Vec<bool> = self.sources.borrow().iter().map(|s| s.favorite).collect();
+        if let Some(target) = drop_target(&favorites, from, to) {
+            self.reorder(from, target);
+        }
+    }
+
+    /// Takes the library at `from` out and puts it back at `to`, and saves
+    /// the order.
+    fn reorder(self: &Rc<Self>, from: usize, to: usize) {
+        let mut ids: Vec<SourceId> = self.sources.borrow().iter().map(|s| s.source.id).collect();
+        let id = ids.remove(from);
+        ids.insert(to, id);
+        if let Err(err) = self.store.set_source_order(&ids) {
+            self.show_error(&format!("Cannot save the order: {err}"));
+        }
+        self.reload_sources();
+    }
+
+    /// Everything starred, for Home: favourite libraries (as their root
+    /// folder) in list order, then favourite folders in the order marked.
+    pub fn favorites(&self) -> Vec<(Library, SourcePath)> {
+        let mut out: Vec<_> = self
+            .sources
             .borrow()
             .iter()
-            .map(|s| (s.source.clone(), s.location.clone()))
+            .filter(|s| s.favorite)
+            .map(|s| (s.clone(), SourcePath::root()))
+            .collect();
+        out.extend(self.favorite_folders());
+        out
+    }
+
+    /// Favourite folders of libraries that are still there, in the order
+    /// they were marked.
+    fn favorite_folders(&self) -> Vec<(Library, SourcePath)> {
+        let favorites = self.store.favorite_folders().unwrap_or_else(|err| {
+            eprintln!("enthuse: cannot load favourite folders: {err}");
+            Vec::new()
+        });
+        let sources = self.sources.borrow();
+        favorites
+            .into_iter()
+            .filter_map(|(id, path)| {
+                let library = sources.iter().find(|s| s.source.id == id)?;
+                Some((library.clone(), path))
+            })
             .collect()
+    }
+
+    /// Unstars a folder, or at a library's root the library.
+    pub fn remove_favorite(self: &Rc<Self>, id: SourceId, path: &SourcePath) {
+        if path.is_root() {
+            let index = self.sources.borrow().iter().position(|s| s.source.id == id);
+            if let Some(index) = index {
+                self.set_source_favorite(index, false);
+            }
+            return;
+        }
+        if let Err(err) = self.store.set_folder_favorite(id, path, false) {
+            self.show_error(&format!("Cannot save this favourite: {err}"));
+        }
+        self.update_favorite();
+        self.changed();
+    }
+
+    /// Shows `path` in the library with id `id`, e.g. a favourite folder.
+    pub fn open_folder(self: &Rc<Self>, id: SourceId, path: SourcePath) {
+        let index = self.sources.borrow().iter().position(|s| s.source.id == id);
+        if let Some(index) = index {
+            self.navigate(Location::Folder {
+                source: Slot::Saved(index),
+                path,
+            });
+        }
+    }
+
+    /// The header's star: makes the folder shown a favourite, or not. At a
+    /// library's root that is the library itself.
+    fn toggle_favorite(self: &Rc<Self>) {
+        let Location::Folder {
+            source: Slot::Saved(index),
+            path,
+        } = self.location.borrow().clone()
+        else {
+            return;
+        };
+        let favorite = !self.is_favorite(index, &path);
+        if path.is_root() {
+            self.set_source_favorite(index, favorite);
+            return;
+        }
+        let Some(id) = self.sources.borrow().get(index).map(|s| s.source.id) else {
+            return;
+        };
+        if let Err(err) = self.store.set_folder_favorite(id, &path, favorite) {
+            self.show_error(&format!("Cannot save this favourite: {err}"));
+        }
+        self.update_favorite();
+        self.changed();
+    }
+
+    /// Whether the folder at `path` of library `index` is a favourite: the
+    /// library itself at its root.
+    fn is_favorite(&self, index: usize, path: &SourcePath) -> bool {
+        let sources = self.sources.borrow();
+        let Some(library) = sources.get(index) else {
+            return false;
+        };
+        if path.is_root() {
+            library.favorite
+        } else {
+            self.store
+                .is_favorite_folder(library.source.id, path)
+                .unwrap_or(false)
+        }
+    }
+
+    /// Shows the header's star for the folder shown: only inside libraries.
+    fn update_favorite(&self) {
+        let Some(ui) = self.ui() else {
+            return;
+        };
+        let w = ui.model();
+        match &*self.location.borrow() {
+            Location::Folder {
+                source: Slot::Saved(index),
+                path,
+            } => {
+                w.set_can_favorite(true);
+                w.set_favorite(self.is_favorite(*index, path));
+            }
+            _ => {
+                w.set_can_favorite(false);
+                w.set_favorite(false);
+            }
+        }
     }
 
     /// The source with database id `id`, if it is still in the list.
@@ -321,7 +506,7 @@ impl Browser {
                 .sources
                 .borrow()
                 .get(i)
-                .map(|s| s.source.source.display_name())
+                .map(|s| s.source.name.clone())
                 .unwrap_or_default(),
             Slot::Unsaved => {
                 let top = self.unsaved_root.borrow();
@@ -441,18 +626,12 @@ impl Browser {
                 return None;
             }
         };
-        self.sources.borrow_mut().push(SourceSlot {
-            source: SourceRef {
-                id,
-                source: Arc::new(source),
-            },
-            location: path.to_owned(),
-        });
+        self.load_sources();
         if matches!(*self.location.borrow(), Location::Sources) {
             self.show_sources();
         }
         self.changed();
-        Some(self.sources.borrow().len() - 1)
+        self.sources.borrow().iter().position(|s| s.source.id == id)
     }
 
     /// Lists the current folder again, e.g. to update watched markers after
@@ -463,6 +642,9 @@ impl Browser {
         self.changed();
     }
 
+    /// Reads the libraries from the database, in their listed order.
+    /// The browser's location is by index, so callers that may change the
+    /// order use [`Self::reload_sources`].
     fn load_sources(&self) {
         let saved = match self.store.sources() {
             Ok(saved) => saved,
@@ -472,16 +654,64 @@ impl Browser {
                 return;
             }
         };
-        let mut sources = self.sources.borrow_mut();
-        for s in saved.into_iter().filter(|s| s.kind == LOCAL) {
-            sources.push(SourceSlot {
+        *self.sources.borrow_mut() = saved
+            .into_iter()
+            .filter(|s| s.kind == LOCAL)
+            .map(|s| Library {
                 source: SourceRef {
                     id: s.id,
                     source: Arc::new(LocalFs::new(Path::new(&s.location))),
+                    name: s.name,
                 },
                 location: s.location,
-            });
+                favorite: s.favorite,
+            })
+            .collect();
+    }
+
+    /// Reads the libraries again after a rename, favourite or move, and
+    /// stays in the same folder (whose library may have a new index).
+    fn reload_sources(self: &Rc<Self>) {
+        let shown = match &*self.location.borrow() {
+            Location::Folder {
+                source: Slot::Saved(i),
+                path,
+            } => self
+                .sources
+                .borrow()
+                .get(*i)
+                .map(|s| (s.source.id, path.clone())),
+            _ => None,
+        };
+        self.load_sources();
+        if let Some((id, path)) = shown {
+            let index = self.sources.borrow().iter().position(|s| s.source.id == id);
+            *self.location.borrow_mut() = match index {
+                Some(i) => Location::Folder {
+                    source: Slot::Saved(i),
+                    path,
+                },
+                None => Location::Sources,
+            };
+            // The breadcrumb shows the library's name.
+            if let Some(i) = index
+                && let Some(ui) = self.ui()
+            {
+                let name = self.slot_name(Slot::Saved(i));
+                let location = self.location.borrow().clone();
+                if let Location::Folder { path, .. } = location {
+                    let crumbs = crumbs(&name, &path);
+                    ui.model()
+                        .set_title(crumbs.last().cloned().unwrap_or_default());
+                    ui.model().set_crumbs(ModelRc::new(VecModel::from(crumbs)));
+                }
+            }
         }
+        if matches!(*self.location.borrow(), Location::Sources) {
+            self.show_sources();
+        }
+        self.update_favorite();
+        self.changed();
     }
 
     /// Removes the source at `index` and forgets it in the database. If the
@@ -585,6 +815,7 @@ impl Browser {
             }
         ));
         self.update_resume_label();
+        self.update_favorite();
 
         match location {
             Location::Sources => {
@@ -633,7 +864,7 @@ impl Browser {
             .borrow()
             .iter()
             .map(|s| BrowserItem {
-                label: s.source.source.display_name().into(),
+                label: s.source.name.as_str().into(),
                 detail: s.location.as_str().into(),
                 kind: ItemKind::Source,
                 badge: ItemBadge::None,

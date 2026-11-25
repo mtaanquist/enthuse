@@ -1,7 +1,7 @@
 // Home screen (docs/ui.md, "Home"): continue watching and the sources.
 // Rust fills HomeModel for each window; the screen only displays it.
 
-import { ScrollView } from "std-widgets.slint";
+import { LineEdit, ScrollView } from "std-widgets.slint";
 import { Theme, Icons, KeyFocus } from "theme.slint";
 import { ButtonVariant, IconButton, PillButton } from "components/buttons.slint";
 import { ButtonBehavior, FocusGrid } from "components/behavior.slint";
@@ -17,7 +17,7 @@ export struct ContinueItem {
     thumbnail: image,
 }
 
-export enum SourceIcon { drive, server, library }
+export enum SourceIcon { drive, server, library, folder }
 
 export struct SourceTileItem {
     name: string,
@@ -27,11 +27,22 @@ export struct SourceTileItem {
     kind-label: string,
     icon: SourceIcon,
     offline: bool,
+    // A library listed first (#59).
+    favorite: bool,
+    // Room to move within its group (favourites, or the rest).
+    can-move-earlier: bool,
+    can-move-later: bool,
+    // A tile in the Favourites row: its menu only unstars it.
+    folder: bool,
 }
 
 export global HomeModel {
     in property <[ContinueItem]> continue-items;
     in property <[SourceTileItem]> sources;
+    // Favourite folders inside libraries.
+    in property <[SourceTileItem]> favorites;
+    // How many of the sources are favourites; they come first.
+    in property <int> favorite-count;
     // False until the sources are known, so first run doesn't flash.
     in property <bool> loaded;
 
@@ -39,6 +50,15 @@ export global HomeModel {
     callback open-source(int);
     callback remove-source(int);
     callback add-source();
+    callback toggle-favorite(int);
+    // A new name for a library; empty goes back to the folder's name.
+    callback rename-source(int, string);
+    // Moves a library one place; true is later.
+    callback move-source(int, bool);
+    // A library dragged from the first index to the second.
+    callback drop-source(int, int);
+    callback open-favorite(int);
+    callback remove-favorite(int);
     // Asks Rust to load the lists again, e.g. when Home shows.
     callback refresh();
 }
@@ -144,11 +164,73 @@ component ContinueCard inherits Rectangle {
     }
 }
 
+// One row of a tile's menu.
+component MenuItem inherits Rectangle {
+    in property <string> text;
+    in property <image> icon;
+    in property <bool> danger;
+    callback clicked();
+
+    height: Theme.touch-target;
+    border-radius: Theme.radius-small;
+    background: item-behavior.has-hover ? Theme.line-strong : transparent;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-action-default => { root.clicked(); }
+
+    HorizontalLayout {
+        padding-left: Theme.space-12;
+        padding-right: Theme.space-12;
+        spacing: Theme.space-12;
+
+        Image {
+            width: Theme.icon-size;
+            source: root.icon;
+            colorize: root.danger ? Theme.danger : Theme.text-muted;
+            image-fit: contain;
+        }
+
+        Text {
+            text: root.text;
+            color: Theme.text;
+            font-size: Theme.label-size;
+            vertical-alignment: center;
+        }
+    }
+
+    item-behavior := ButtonBehavior {
+        ring-radius: Theme.radius-small;
+        clicked => { root.clicked(); }
+    }
+}
+
 component SourceTile inherits Rectangle {
     in property <SourceTileItem> item;
     callback clicked();
     callback remove();
+    callback toggle-favorite();
+    callback rename(string);
+    callback move(bool);
     callback arrow(string) -> bool;
+    // Bottom of the visible area, in window coordinates. Popups that would
+    // not fit below the tile open above it.
+    in property <length> viewport-bottom: 1000000px;
+    // Can be dragged with the mouse to reorder (see ButtonBehavior).
+    in property <bool> draggable;
+    out property <bool> dragging: behavior.dragging;
+    out property <length> drag-dx: behavior.drag-dx;
+    out property <length> drag-dy: behavior.drag-dy;
+    callback drag-moved();
+    callback drag-ended();
+
+    // Fits "Remove from favourites" with its icon.
+    property <length> menu-width: 264px;
+    property <int> menu-items: root.item.folder ? 1 : 3 + (root.item.can-move-earlier ? 1 : 0) + (root.item.can-move-later ? 1 : 0);
+    property <length> menu-height: root.menu-items * Theme.touch-target + 2 * Theme.space-4 + 2px;
+    property <bool> menu-up: root.absolute-position.y + more.y + more.height + Theme.space-4 + root.menu-height > root.viewport-bottom - Theme.space-16;
+    // Title, field and buttons of the rename popup.
+    property <length> rename-height: 190px;
+    property <bool> rename-up: root.absolute-position.y + root.height + Theme.space-4 + root.rename-height > root.viewport-bottom - Theme.space-16;
 
     height: 84px;
     border-radius: Theme.radius-large;
@@ -181,7 +263,7 @@ component SourceTile inherits Rectangle {
             Image {
                 width: Theme.icon-size;
                 height: Theme.icon-size;
-                source: root.item.icon == SourceIcon.server ? Icons.server : root.item.icon == SourceIcon.library ? Icons.library : Icons.drive;
+                source: root.item.icon == SourceIcon.server ? Icons.server : root.item.icon == SourceIcon.library ? Icons.library : root.item.icon == SourceIcon.folder ? Icons.folder : Icons.drive;
                 colorize: Theme.accent;
             }
         }
@@ -193,7 +275,8 @@ component SourceTile inherits Rectangle {
 
             name := TipText {
                 text: root.item.name;
-                hovered: behavior.has-hover;
+                // No tips while the tile is dragged.
+                hovered: behavior.has-hover && !behavior.dragging;
                 font-size: Theme.body-size;
                 font-weight: Theme.body-strong-weight;
             }
@@ -202,13 +285,24 @@ component SourceTile inherits Rectangle {
             // cut too (one tip at a time).
             TipText {
                 text: root.item.detail;
-                hovered: behavior.has-hover && !name.cut;
+                hovered: behavior.has-hover && !behavior.dragging && !name.cut;
                 text-color: Theme.text-muted;
                 font-size: Theme.label-size;
             }
         }
 
-        Rectangle {
+        if root.item.favorite: Image {
+            width: Theme.icon-size;
+            height: Theme.icon-size;
+            horizontal-stretch: 0;
+            y: (parent.height - self.height) / 2;
+            source: Icons.star-filled;
+            colorize: Theme.accent;
+            accessible-role: image;
+            accessible-label: "Favourite";
+        }
+
+        if !root.item.folder: Rectangle {
             width: chip-text.preferred-width + 2 * Theme.space-12;
             height: 28px;
             horizontal-stretch: 0;
@@ -233,9 +327,16 @@ component SourceTile inherits Rectangle {
 
     behavior := ButtonBehavior {
         ring-radius: Theme.radius-large;
+        draggable: root.draggable;
         clicked => { root.clicked(); }
         arrow(k) => { return root.arrow(k); }
+        drag-moved => { root.drag-moved(); }
+        drag-ended => { root.drag-ended(); }
     }
+
+    // Lifted while dragged.
+    drop-shadow-blur: root.dragging ? 24px : 0px;
+    drop-shadow-color: rgba(0, 0, 0, 0.45);
 
     more := IconButton {
         x: parent.width - self.width - Theme.space-8;
@@ -248,9 +349,9 @@ component SourceTile inherits Rectangle {
     }
 
     menu := PopupWindow {
-        x: more.x + more.width - 200px;
-        y: more.y + more.height + Theme.space-4;
-        width: 200px;
+        x: more.x + more.width - root.menu-width;
+        y: root.menu-up ? more.y - Theme.space-4 - root.menu-height : more.y + more.height + Theme.space-4;
+        width: root.menu-width;
 
         Rectangle {
             border-radius: Theme.radius-medium;
@@ -263,38 +364,116 @@ component SourceTile inherits Rectangle {
             VerticalLayout {
                 padding: Theme.space-4;
 
-                Rectangle {
+                if !root.item.folder: MenuItem {
+                    text: root.item.favorite ? "Remove from favourites" : "Add to favourites";
+                    icon: root.item.favorite ? Icons.star-filled : Icons.star;
+                    clicked => {
+                        // Before closing: closing drops the rest of this handler.
+                        root.toggle-favorite();
+                        menu.close();
+                    }
+                }
+
+                if !root.item.folder: MenuItem {
+                    text: "Rename…";
+                    icon: Icons.library;
+                    clicked => {
+                        // Before closing: closing drops the rest of this handler.
+                        rename-popup.show();
+                        menu.close();
+                    }
+                }
+
+                if root.item.can-move-earlier: MenuItem {
+                    text: "Move earlier";
+                    icon: Icons.back;
+                    clicked => {
+                        // Before closing: closing drops the rest of this handler.
+                        root.move(false);
+                        menu.close();
+                    }
+                }
+
+                if root.item.can-move-later: MenuItem {
+                    text: "Move later";
+                    icon: Icons.chevron-right;
+                    clicked => {
+                        // Before closing: closing drops the rest of this handler.
+                        root.move(true);
+                        menu.close();
+                    }
+                }
+
+                MenuItem {
+                    text: root.item.folder ? "Remove from favourites" : "Remove source";
+                    icon: Icons.close;
+                    danger: true;
+                    clicked => {
+                        // Before closing: closing drops the rest of this handler.
+                        root.remove();
+                        menu.close();
+                    }
+                }
+            }
+        }
+    }
+
+    rename-popup := PopupWindow {
+        x: 0;
+        y: root.rename-up ? -Theme.space-4 - root.rename-height : root.height + Theme.space-4;
+        width: max(root.width, 320px);
+        close-policy: close-on-click-outside;
+
+        Rectangle {
+            border-radius: Theme.radius-medium;
+            background: Theme.surface-raised;
+            border-width: 1px;
+            border-color: Theme.line-strong;
+            drop-shadow-blur: 24px;
+            drop-shadow-color: rgba(0, 0, 0, 0.45);
+
+            VerticalLayout {
+                padding: Theme.space-16;
+                spacing: Theme.space-12;
+
+                Text {
+                    text: "Rename library";
+                    color: Theme.text;
+                    font-size: Theme.body-size;
+                    font-weight: Theme.body-strong-weight;
+                }
+
+                name-field := LineEdit {
                     height: Theme.touch-target;
-                    border-radius: Theme.radius-small;
-                    background: remove-behavior.has-hover ? Theme.line-strong : transparent;
-                    accessible-role: button;
-                    accessible-label: "Remove source";
-                    accessible-action-default => { root.remove(); }
+                    font-size: Theme.body-size;
+                    text: root.item.name;
+                    placeholder-text: "Leave empty for the folder's name";
+                    init => {
+                        self.select-all();
+                        self.focus();
+                    }
+                    accepted(text) => {
+                        rename-popup.close();
+                        root.rename(text);
+                    }
+                }
 
-                    HorizontalLayout {
-                        padding-left: Theme.space-12;
-                        spacing: Theme.space-12;
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: Theme.space-12;
 
-                        Image {
-                            width: Theme.icon-size;
-                            source: Icons.close;
-                            colorize: Theme.danger;
-                            image-fit: contain;
-                        }
-
-                        Text {
-                            text: "Remove source";
-                            color: Theme.text;
-                            font-size: Theme.label-size;
-                            vertical-alignment: center;
-                        }
+                    PillButton {
+                        variant: ButtonVariant.outline;
+                        text: "Cancel";
+                        clicked => { rename-popup.close(); }
                     }
 
-                    remove-behavior := ButtonBehavior {
-                        ring-radius: Theme.radius-small;
+                    PillButton {
+                        variant: ButtonVariant.primary;
+                        text: "Save";
                         clicked => {
-                            menu.close();
-                            root.remove();
+                            rename-popup.close();
+                            root.rename(name-field.text);
                         }
                     }
                 }
@@ -305,11 +484,12 @@ component SourceTile inherits Rectangle {
 
 export component HomePage inherits Rectangle {
     callback open-source(int);
+    callback open-favorite(int);
 
     // Arrow keys move within the cards and within the tiles; Up from the
     // tiles goes to the cards and Down from the cards to the tiles. The
     // item to focus is asked for by bumping the serial.
-    property <int> focus-group; // 0 cards, 1 tiles
+    property <int> focus-group; // 0 cards, 1 tiles, 2 favourites
     property <int> focus-target: -1;
     property <int> focus-serial;
     property <int> first-serial: KeyFocus.first-serial;
@@ -338,6 +518,25 @@ export component HomePage inherits Rectangle {
 
     property <length> pad: root.width < 700px ? Theme.space-24 : Theme.content-padding-x;
     property <length> gap: Theme.space-24;
+
+    // Dragging a source tile: from its index, to where it would land. The
+    // tiles in between slide over to make room.
+    property <int> drag-from: -1;
+    property <int> drag-to: -1;
+
+    // Where the tile at `index` shows while another is dragged.
+    pure function slot(index: int) -> int {
+        if (root.drag-from < 0 || index == root.drag-from) {
+            return index;
+        }
+        if (root.drag-from < root.drag-to && index > root.drag-from && index <= root.drag-to) {
+            return index - 1;
+        }
+        if (root.drag-to < root.drag-from && index >= root.drag-to && index < root.drag-from) {
+            return index + 1;
+        }
+        index
+    }
 
     scroll := ScrollView {
         property <length> inner: self.visible-width - 2 * root.pad;
@@ -388,7 +587,9 @@ export component HomePage inherits Rectangle {
                             }
                         }
                         arrow(k) => {
-                            if (k == Key.DownArrow && HomeModel.sources.length > 0) {
+                            if (k == Key.DownArrow && HomeModel.favorites.length > 0) {
+                                root.move-to(2, 0);
+                            } else if (k == Key.DownArrow && HomeModel.sources.length > 0) {
                                 root.move-to(1, 0);
                             } else {
                                 root.move-to(0, FocusGrid.target(index, scroll.card-count, scroll.card-count, k));
@@ -400,6 +601,46 @@ export component HomePage inherits Rectangle {
                         visible: index < scroll.card-count;
                         item: item;
                         clicked => { HomeModel.play(index); }
+                    }
+                }
+            }
+
+            if HomeModel.loaded && HomeModel.favorites.length > 0: VerticalLayout {
+                spacing: Theme.space-16;
+
+                SectionHeading {
+                    text: "Favourites";
+                }
+
+                Rectangle {
+                    property <int> rows: ceil(HomeModel.favorites.length / scroll.tile-columns);
+                    height: self.rows * 84px + max(0, self.rows - 1) * root.gap;
+
+                    for tile[index] in HomeModel.favorites: SourceTile {
+                        property <int> serial: root.focus-serial;
+                        changed serial => {
+                            if (root.focus-group == 2 && index == root.focus-target) {
+                                root.reveal(self.absolute-position.y - scroll.absolute-position.y, self.height);
+                                self.focus();
+                            }
+                        }
+                        arrow(k) => {
+                            if (k == Key.UpArrow && index < scroll.tile-columns && HomeModel.continue-items.length > 0) {
+                                root.move-to(0, 0);
+                            } else if (k == Key.DownArrow && index + scroll.tile-columns >= HomeModel.favorites.length && HomeModel.sources.length > 0) {
+                                root.move-to(1, 0);
+                            } else {
+                                root.move-to(2, FocusGrid.target(index, HomeModel.favorites.length, scroll.tile-columns, k));
+                            }
+                            return true;
+                        }
+                        x: mod(index, scroll.tile-columns) * (scroll.tile-width + root.gap);
+                        y: floor(index / scroll.tile-columns) * (84px + root.gap);
+                        width: scroll.tile-width;
+                        viewport-bottom: scroll.absolute-position.y + scroll.visible-height;
+                        item: tile;
+                        clicked => { root.open-favorite(index); }
+                        remove => { HomeModel.remove-favorite(index); }
                     }
                 }
             }
@@ -425,6 +666,9 @@ export component HomePage inherits Rectangle {
 
                     for tile[index] in HomeModel.sources: SourceTile {
                         property <int> serial: root.focus-serial;
+                        property <int> slot: root.slot(index);
+                        property <length> step-x: scroll.tile-width + root.gap;
+                        property <length> step-y: 84px + root.gap;
                         changed serial => {
                             if (root.focus-group == 1 && index == root.focus-target) {
                                 root.reveal(self.absolute-position.y - scroll.absolute-position.y, self.height);
@@ -432,19 +676,49 @@ export component HomePage inherits Rectangle {
                             }
                         }
                         arrow(k) => {
-                            if (k == Key.UpArrow && index < scroll.tile-columns && HomeModel.continue-items.length > 0) {
+                            if (k == Key.UpArrow && index < scroll.tile-columns && HomeModel.favorites.length > 0) {
+                                root.move-to(2, 0);
+                            } else if (k == Key.UpArrow && index < scroll.tile-columns && HomeModel.continue-items.length > 0) {
                                 root.move-to(0, 0);
                             } else {
                                 root.move-to(1, FocusGrid.target(index, HomeModel.sources.length, scroll.tile-columns, k));
                             }
                             return true;
                         }
-                        x: mod(index, scroll.tile-columns) * (scroll.tile-width + root.gap);
-                        y: floor(index / scroll.tile-columns) * (84px + root.gap);
+                        x: self.dragging ? mod(index, scroll.tile-columns) * self.step-x + self.drag-dx : mod(self.slot, scroll.tile-columns) * self.step-x;
+                        y: self.dragging ? floor(index / scroll.tile-columns) * self.step-y + self.drag-dy : floor(self.slot / scroll.tile-columns) * self.step-y;
+                        z: self.dragging ? 1 : 0;
+                        animate x, y {
+                            duration: self.dragging ? 0ms : Theme.hover-duration;
+                        }
                         width: scroll.tile-width;
+                        viewport-bottom: scroll.absolute-position.y + scroll.visible-height;
+                        draggable: HomeModel.sources.length > 1;
                         item: tile;
+                        drag-moved => {
+                            // The grid cell under the tile's center, kept
+                            // inside its group (favourites come first).
+                            let cx = mod(index, scroll.tile-columns) * self.step-x + self.drag-dx + scroll.tile-width / 2;
+                            let cy = floor(index / scroll.tile-columns) * self.step-y + self.drag-dy + 42px;
+                            let col = clamp(floor(cx / self.step-x), 0, scroll.tile-columns - 1);
+                            let row = max(0, floor(cy / self.step-y));
+                            let first = tile.favorite ? 0 : HomeModel.favorite-count;
+                            let last = tile.favorite ? HomeModel.favorite-count - 1 : HomeModel.sources.length - 1;
+                            root.drag-from = index;
+                            root.drag-to = clamp(row * scroll.tile-columns + col, first, last);
+                        }
+                        drag-ended => {
+                            if (root.drag-from >= 0 && root.drag-to != root.drag-from) {
+                                HomeModel.drop-source(root.drag-from, root.drag-to);
+                            }
+                            root.drag-from = -1;
+                            root.drag-to = -1;
+                        }
                         clicked => { root.open-source(index); }
                         remove => { HomeModel.remove-source(index); }
+                        toggle-favorite => { HomeModel.toggle-favorite(index); }
+                        rename(name) => { HomeModel.rename-source(index, name); }
+                        move(later) => { HomeModel.move-source(index, later); }
                     }
                 }
             }

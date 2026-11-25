@@ -7,6 +7,7 @@
 pub mod controls;
 pub mod ended;
 pub mod folder;
+pub mod library;
 pub mod natsort;
 pub mod next;
 pub mod paths;
