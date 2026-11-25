@@ -45,6 +45,8 @@ export global BrowserModel {
     in property <string> action-text;
     in property <string> resume-label;
     in property <string> sort-label: "Sort: Name";
+    // A folder that was dropped or opened without adding it as a library.
+    in property <bool> unsaved;
     // 0 = list, 1 = grid.
     in-out property <int> view-mode;
 
@@ -58,6 +60,8 @@ export global BrowserModel {
     callback crumb(int);
     callback primary-action();
     callback retry();
+    // Save the folder shown, opened without a library, as a library.
+    callback add-library();
 }
 
 // Path segments separated by "/". When too long, it is cut off on the left
@@ -539,6 +543,13 @@ export component BrowserPage inherits Rectangle {
                     font-weight: Theme.body-weight;
                     overflow: elide;
                 }
+            }
+
+            if BrowserModel.unsaved: PillButton {
+                y: (parent.height - self.height) / 2;
+                icon: Icons.add;
+                text: "Add as library";
+                clicked => { BrowserModel.add-library(); }
             }
 
             if BrowserModel.action-text != "" && !BrowserModel.loading: PillButton {

@@ -1,11 +1,14 @@
 //! Enthuse desktop app: Slint UI and wiring.
 //!
-//! `enthuse [folder...] [file-or-url]`: folders become browser sources, and a
-//! file or URL starts playing right away. `--self-test` plays a built-in test
-//! pattern and checks a snapshot of the window, for CI.
+//! `enthuse [file-or-folder...] [url]`: opens files and folders like a drop
+//! on the window (see [`external`]): a folder opens in the browser without
+//! becoming a library, a file or URL starts playing right away.
+//! `--self-test` plays a built-in test pattern and checks a snapshot of the
+//! window, for CI.
 
 mod bg;
 mod browser;
+mod external;
 mod home;
 mod nav;
 mod pip;
@@ -17,7 +20,8 @@ mod settings;
 mod thumbs;
 mod video;
 
-use std::path::Path;
+use std::cell::RefCell;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -32,21 +36,25 @@ slint::include_modules!();
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--help" || a == "-h") {
-        println!("usage: enthuse [folder...] [file-or-url] | enthuse --self-test");
+        println!("usage: enthuse [file-or-folder...] [url] | enthuse --self-test");
         return ExitCode::SUCCESS;
     }
     let self_test = args.iter().any(|a| a == "--self-test");
-    let positional = args.iter().filter(|a| !a.starts_with("--"));
-    let (folders, files): (Vec<&String>, Vec<&String>) =
-        positional.partition(|a| Path::new(a).is_dir());
-    let play = if self_test {
-        Some(selftest::SOURCE.to_owned())
+    // Files and folders on disk open like a drop; anything else is a URL.
+    let (paths, urls): (Vec<&String>, Vec<&String>) = args
+        .iter()
+        .filter(|a| !a.starts_with("--"))
+        .partition(|a| Path::new(a).exists());
+    let start = if self_test {
+        Start::Url(selftest::SOURCE.to_owned())
+    } else if !paths.is_empty() {
+        Start::Paths(paths.into_iter().map(PathBuf::from).collect())
     } else {
-        files.first().map(|f| f.to_string())
+        urls.first()
+            .map_or(Start::Nothing, |u| Start::Url(u.to_string()))
     };
-    let folders: Vec<String> = folders.into_iter().cloned().collect();
 
-    match run(&folders, play, self_test) {
+    match run(start, self_test) {
         Ok(code) => code,
         Err(err) => {
             eprintln!("enthuse: {err}");
@@ -55,11 +63,16 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(
-    folders: &[String],
-    play: Option<String>,
-    self_test: bool,
-) -> Result<ExitCode, Box<dyn std::error::Error>> {
+/// What to show first, from the command line.
+enum Start {
+    Nothing,
+    /// Files and folders, opened as if dropped on the window.
+    Paths(Vec<PathBuf>),
+    /// Played as given, without saving any state.
+    Url(String),
+}
+
+fn run(start: Start, self_test: bool) -> Result<ExitCode, Box<dyn std::error::Error>> {
     // The video underlay needs Slint's OpenGL renderer.
     slint::BackendSelector::new()
         .backend_name("winit".into())
@@ -104,9 +117,6 @@ fn run(
     }
     let playback = playback::Playback::new(&window, player.clone());
     let browser = browser::Browser::new(&window, store.clone());
-    for folder in folders {
-        browser.add_local(folder);
-    }
     let home = home::Home::new(&window, store.clone(), browser.clone());
     let nav = nav::Nav::new(
         &window,
@@ -142,23 +152,40 @@ fn run(
     let capture = video::ScreenCapture::default();
     // mpv needs the render context before a file is loaded, and the render
     // context needs Slint's GL context, which exists once the window is shown.
-    // Files picked in the browser come later, so only the start file waits.
+    // Files picked in the browser come later, so only the start waits.
+    let opener: Rc<RefCell<Option<Rc<external::Opener>>>> = Default::default();
     {
         let playback = playback.clone();
-        let start = play.map(|url| {
+        let plays_file = match &start {
+            Start::Nothing => false,
+            Start::Paths(paths) => !paths.iter().any(|p| p.is_dir()),
+            Start::Url(_) => true,
+        };
+        if plays_file {
             window.set_page(nav::PAGE_PLAYER);
-            let title = title_for(&url);
-            (url, title)
-        });
-        let output = video::VideoOutput::new(player.clone(), move || {
-            if let Some((url, title)) = start {
+        }
+        let opener = opener.clone();
+        let output = video::VideoOutput::new(player.clone(), move || match start {
+            Start::Nothing => {}
+            Start::Paths(paths) => {
+                if let Some(opener) = opener.borrow().as_ref() {
+                    opener.open(&paths);
+                }
+            }
+            Start::Url(url) => {
                 // An error shows on the player's overlay.
-                let _ = playback.open(&url, &title, None);
+                let _ = playback.open(&url, &title_for(&url), None);
             }
         });
         output.attach(&window, Some(capture.clone()))?;
     }
     let pip = pip::Pip::new(&window, browser.clone(), player.clone(), store.clone())?;
+    *opener.borrow_mut() = Some(external::Opener::new(
+        &window,
+        browser.clone(),
+        nav.clone(),
+        pip.clone(),
+    ));
     playback.attach_side(pip.side());
     home.attach_side(pip.side());
     settings.attach_side(pip.side());

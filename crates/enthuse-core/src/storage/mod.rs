@@ -172,6 +172,53 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// Moves the watch state and folder settings of `folder` in `from`, and
+    /// of everything below it, to `to`, where `folder` is the root. Used when
+    /// a folder that was opened without a library is added as one (#60), so
+    /// its resume points and watched marks come along. Rows `to` already has
+    /// are kept.
+    pub fn move_folder_state(
+        &self,
+        from: SourceId,
+        folder: &SourcePath,
+        to: SourceId,
+    ) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        for table in ["watch_state", "folder_settings"] {
+            let paths: Vec<String> = {
+                let mut stmt = self
+                    .conn
+                    .prepare(&format!("SELECT path FROM {table} WHERE source_id = ?1"))?;
+                stmt.query_map([from.0], |r| r.get(0))?
+                    .collect::<rusqlite::Result<_>>()?
+            };
+            for old in paths {
+                let Some(new) = strip_folder(folder, &old) else {
+                    continue;
+                };
+                let columns = match table {
+                    "watch_state" => "position, duration, watched, updated_at",
+                    _ => "resume",
+                };
+                self.conn.execute(
+                    &format!(
+                        "INSERT INTO {table} (source_id, path, {columns})
+                         SELECT ?1, ?2, {columns} FROM {table}
+                         WHERE source_id = ?3 AND path = ?4
+                         ON CONFLICT (source_id, path) DO NOTHING"
+                    ),
+                    params![to.0, new, from.0, old],
+                )?;
+                self.conn.execute(
+                    &format!("DELETE FROM {table} WHERE source_id = ?1 AND path = ?2"),
+                    params![from.0, old],
+                )?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Removes a source and all its watch state.
     pub fn remove_source(&self, id: SourceId) -> Result<()> {
         self.conn
@@ -567,6 +614,18 @@ impl Store {
     }
 }
 
+/// `path` relative to `folder`, if it is the folder or inside it.
+fn strip_folder(folder: &SourcePath, path: &str) -> Option<String> {
+    if folder.is_root() {
+        return Some(path.to_owned());
+    }
+    let f = folder.as_str();
+    if path == f {
+        return Some(String::new());
+    }
+    path.strip_prefix(f)?.strip_prefix('/').map(str::to_owned)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -615,6 +674,47 @@ mod tests {
         // Removing the source drops its files.
         s.remove_source(src).unwrap();
         assert!(s.continue_watching(10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn moving_folder_state_rebases_paths() {
+        let s = store();
+        let pc = s.add_source("computer", "This computer", "").unwrap();
+        let lib = s.add_source("local", "TV", "/srv/tv").unwrap();
+        s.save_progress(pc, &p("srv/tv/Show/a.mkv"), 100.0, Some(1000.0))
+            .unwrap();
+        s.set_watched(pc, &p("srv/tv/b.mkv"), true).unwrap();
+        s.save_progress(pc, &p("srv/tvshows/c.mkv"), 50.0, None)
+            .unwrap();
+        s.set_folder_resume(pc, &p("srv/tv"), Some(false)).unwrap();
+        s.set_folder_resume(pc, &p("srv/tv/Show"), Some(true))
+            .unwrap();
+        // Already in the library: kept as it is.
+        s.save_progress(lib, &p("b.mkv"), 10.0, None).unwrap();
+
+        s.move_folder_state(pc, &p("srv/tv"), lib).unwrap();
+
+        let a = s.watch_state(lib, &p("Show/a.mkv")).unwrap().unwrap();
+        assert_eq!((a.position, a.duration), (Some(100.0), Some(1000.0)));
+        let b = s.watch_state(lib, &p("b.mkv")).unwrap().unwrap();
+        assert_eq!((b.position, b.watched), (Some(10.0), false));
+        assert!(
+            s.watch_state(pc, &p("srv/tv/Show/a.mkv"))
+                .unwrap()
+                .is_none()
+        );
+        assert!(s.watch_state(pc, &p("srv/tv/b.mkv")).unwrap().is_none());
+        // A sibling whose name only starts the same stays.
+        assert!(
+            s.watch_state(pc, &p("srv/tvshows/c.mkv"))
+                .unwrap()
+                .is_some()
+        );
+
+        let o = s.folder_overrides(lib).unwrap();
+        assert_eq!(o[&SourcePath::root()].resume, Some(false));
+        assert_eq!(o[&p("Show")].resume, Some(true));
+        assert!(s.folder_overrides(pc).unwrap().is_empty());
     }
 
     #[test]

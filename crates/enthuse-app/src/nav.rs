@@ -262,13 +262,7 @@ impl Nav {
         let Some(thumbs) = self.thumbs.borrow().clone() else {
             return;
         };
-        let location = self
-            .browser
-            .sources()
-            .into_iter()
-            .find(|(s, _)| s.id == source.id)
-            .map(|(_, location)| location)
-            .unwrap_or_default();
+        let location = self.browser.location_of(source.id, next);
         thumbs.want(source.id, &source.source, &location, next);
         if let Some(w) = self.window.upgrade() {
             w.global::<PlayerModel>()

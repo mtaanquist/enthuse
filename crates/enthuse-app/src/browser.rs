@@ -9,7 +9,10 @@ use std::sync::Arc;
 
 use enthuse_core::folder::{Badge, FolderView, SortOrder};
 use enthuse_core::settings::cycle;
-use enthuse_core::source::{Entry, EntryKind, LocalFs, Source, SourceError, SourcePath};
+use enthuse_core::source::{
+    COMPUTER_NAME, Computer, Entry, EntryKind, LocalFs, Source, SourceError, SourcePath,
+    relative_to,
+};
 use enthuse_core::storage::{SourceId, Store};
 use enthuse_core::time::format_minutes;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel, Weak};
@@ -22,6 +25,9 @@ const TOAST_TIME: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Stored `kind` for [`LocalFs`] sources.
 const LOCAL: &str = "local";
+/// Stored `kind` of the one [`Computer`] source, which holds the watch
+/// state of files outside any library. Never listed as a library.
+const COMPUTER: &str = "computer";
 
 /// A source and its id in the database.
 #[derive(Clone)]
@@ -39,11 +45,21 @@ struct SourceSlot {
     location: String,
 }
 
+/// A source the browser can be in.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Slot {
+    /// The library at this index in the source list.
+    Saved(usize),
+    /// A folder opened without adding it as a library (#60), on the
+    /// [`Computer`] source. Its top is [`Browser::unsaved_root`].
+    Unsaved,
+}
+
 /// Where the browser is: the source list, or a folder inside a source.
 #[derive(Clone)]
 enum Location {
     Sources,
-    Folder { source: usize, path: SourcePath },
+    Folder { source: Slot, path: SourcePath },
 }
 
 /// The window the browser shows in: the main window, or its own window
@@ -91,10 +107,12 @@ macro_rules! wire_callbacks {
         let b = $browser.clone();
         model.on_retry(move || b.refresh());
         let b = $browser.clone();
+        model.on_add_library(move || b.save_unsaved());
+        let b = $browser.clone();
         model.on_add_source(move |path| {
             if let Some(index) = b.add_local(path.trim()) {
                 b.navigate(Location::Folder {
-                    source: index,
+                    source: Slot::Saved(index),
                     path: SourcePath::root(),
                 });
             }
@@ -106,6 +124,11 @@ pub struct Browser {
     view: RefCell<View>,
     store: Rc<Store>,
     sources: RefCell<Vec<SourceSlot>>,
+    /// Files outside any library, by absolute path. `None` if the database
+    /// could not save it; such files then cannot be opened.
+    computer: Option<SourceRef>,
+    /// The folder that was opened without a library, on `computer`.
+    unsaved_root: RefCell<SourcePath>,
     location: RefCell<Location>,
     entries: RefCell<Vec<Entry>>,
     sort: Cell<SortOrder>,
@@ -127,10 +150,22 @@ pub struct Browser {
 impl Browser {
     /// Shows the sources saved in `store`.
     pub fn new(window: &AppWindow, store: Rc<Store>) -> Rc<Self> {
+        let computer = match store.add_source(COMPUTER, COMPUTER_NAME, "") {
+            Ok(id) => Some(SourceRef {
+                id,
+                source: Arc::new(Computer),
+            }),
+            Err(err) => {
+                eprintln!("enthuse: cannot save files outside libraries: {err}");
+                None
+            }
+        };
         let this = Rc::new(Self {
             view: RefCell::new(View::Main(window.as_weak())),
             store,
             sources: Default::default(),
+            computer,
+            unsaved_root: Default::default(),
             location: RefCell::new(Location::Sources),
             entries: Default::default(),
             sort: Default::default(),
@@ -181,7 +216,7 @@ impl Browser {
         let Location::Folder { source, .. } = *self.location.borrow() else {
             return;
         };
-        let Some(source_id) = self.sources.borrow().get(source).map(|s| s.source.id) else {
+        let Some(source_id) = self.slot_source(source).map(|s| s.id) else {
             return;
         };
         let Some(index) = self
@@ -234,7 +269,11 @@ impl Browser {
     }
 
     /// The source with database id `id`, if it is still in the list.
+    /// That includes the source of files outside any library.
     pub fn source_by_id(&self, id: SourceId) -> Option<SourceRef> {
+        if let Some(computer) = self.computer.as_ref().filter(|c| c.id == id) {
+            return Some(computer.clone());
+        }
         self.sources
             .borrow()
             .iter()
@@ -242,11 +281,140 @@ impl Browser {
             .map(|s| s.source.clone())
     }
 
+    /// Where `path` of source `id` is, for telling network shares apart:
+    /// the library's location, or the file's own path outside libraries.
+    pub fn location_of(&self, id: SourceId, path: &SourcePath) -> String {
+        if self.computer.as_ref().is_some_and(|c| c.id == id) {
+            return Computer::os_path(path)
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default();
+        }
+        self.sources
+            .borrow()
+            .iter()
+            .find(|s| s.source.id == id)
+            .map(|s| s.location.clone())
+            .unwrap_or_default()
+    }
+
+    /// The source of `slot`, if it still exists.
+    fn slot_source(&self, slot: Slot) -> Option<SourceRef> {
+        match slot {
+            Slot::Saved(i) => self.sources.borrow().get(i).map(|s| s.source.clone()),
+            Slot::Unsaved => self.computer.clone(),
+        }
+    }
+
+    /// The top folder of `slot`: the library's root, or the folder that
+    /// was opened without a library.
+    fn slot_top(&self, slot: Slot) -> SourcePath {
+        match slot {
+            Slot::Saved(_) => SourcePath::root(),
+            Slot::Unsaved => self.unsaved_root.borrow().clone(),
+        }
+    }
+
+    /// The name of `slot`'s top folder, first in the breadcrumb.
+    fn slot_name(&self, slot: Slot) -> String {
+        match slot {
+            Slot::Saved(i) => self
+                .sources
+                .borrow()
+                .get(i)
+                .map(|s| s.source.source.display_name())
+                .unwrap_or_default(),
+            Slot::Unsaved => {
+                let top = self.unsaved_root.borrow();
+                match top.name() {
+                    Some(name) => name.to_owned(),
+                    // A drive or "/": its OS path names it best.
+                    None => Computer::os_path(&top)
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| COMPUTER_NAME.to_owned()),
+                }
+            }
+        }
+    }
+
+    /// Where a file or folder from outside the app (dropped on the window,
+    /// or on the command line) is: in the library that holds it, the
+    /// deepest if libraries are nested, or else on the computer.
+    fn resolve(&self, os: &Path) -> Option<(Slot, SourceRef, SourcePath)> {
+        let os = std::path::absolute(os).ok()?;
+        let sources = self.sources.borrow();
+        let library = sources
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| Some((i, s, relative_to(Path::new(&s.location), &os)?)))
+            .max_by_key(|(_, s, _)| s.location.len());
+        if let Some((i, slot, path)) = library {
+            return Some((Slot::Saved(i), slot.source.clone(), path));
+        }
+        let computer = self.computer.clone()?;
+        Some((Slot::Unsaved, computer, Computer::path_of(&os)?))
+    }
+
+    /// Plays a file from outside the app, resuming it if it was played
+    /// before, whether or not a library holds it.
+    pub fn play_external(&self, file: &Path) {
+        let Some((_, source, path)) = self.resolve(file) else {
+            self.show_error(&format!("Can't open {}", file.display()));
+            return;
+        };
+        if let Some(play) = self.on_play.borrow().as_ref() {
+            play(source, path);
+        }
+    }
+
+    /// Shows a folder from outside the app: inside its library if one holds
+    /// it, or else as a temporary location that is not saved (#60).
+    pub fn open_external(self: &Rc<Self>, folder: &Path) {
+        let Some((slot, _, path)) = self.resolve(folder) else {
+            self.show_error(&format!("Can't open {}", folder.display()));
+            return;
+        };
+        if slot == Slot::Unsaved {
+            *self.unsaved_root.borrow_mut() = path.clone();
+        }
+        self.navigate(Location::Folder { source: slot, path });
+    }
+
+    /// Adds the folder that was opened without a library as a library,
+    /// keeping its watch state, and stays in the same folder.
+    fn save_unsaved(self: &Rc<Self>) {
+        let Location::Folder {
+            source: Slot::Unsaved,
+            path,
+        } = self.location.borrow().clone()
+        else {
+            return;
+        };
+        let top = self.unsaved_root.borrow().clone();
+        let Some(os) = Computer::os_path(&top) else {
+            return;
+        };
+        let Some(index) = self.add_local(&os.to_string_lossy()) else {
+            return;
+        };
+        let library = self.sources.borrow()[index].source.id;
+        if let Some(computer) = &self.computer
+            && let Err(err) = self.store.move_folder_state(computer.id, &top, library)
+        {
+            self.show_error(&format!("Cannot keep the watch state: {err}"));
+        }
+        let path = below(&top, &path).unwrap_or_default();
+        self.navigate(Location::Folder {
+            source: Slot::Saved(index),
+            path,
+        });
+        self.changed();
+    }
+
     /// Shows the root folder of the source at `index`.
     pub fn open_source(self: &Rc<Self>, index: usize) {
         if index < self.sources.borrow().len() {
             self.navigate(Location::Folder {
-                source: index,
+                source: Slot::Saved(index),
                 path: SourcePath::root(),
             });
         }
@@ -330,10 +498,16 @@ impl Browser {
         let location = self.location.borrow().clone();
         match location {
             Location::Sources => self.show_sources(),
-            Location::Folder { source, .. } if source == index => self.navigate(Location::Sources),
-            Location::Folder { source, path } if source > index => {
+            Location::Folder {
+                source: Slot::Saved(i),
+                ..
+            } if i == index => self.navigate(Location::Sources),
+            Location::Folder {
+                source: Slot::Saved(i),
+                path,
+            } if i > index => {
                 *self.location.borrow_mut() = Location::Folder {
-                    source: source - 1,
+                    source: Slot::Saved(i - 1),
                     path,
                 };
             }
@@ -345,14 +519,7 @@ impl Browser {
     fn activate(self: &Rc<Self>, index: usize) {
         let location = self.location.borrow().clone();
         match location {
-            Location::Sources => {
-                if index < self.sources.borrow().len() {
-                    self.navigate(Location::Folder {
-                        source: index,
-                        path: SourcePath::root(),
-                    });
-                }
-            }
+            Location::Sources => self.open_source(index),
             Location::Folder { source, .. } => {
                 let Some(entry) = self.entries.borrow().get(index).cloned() else {
                     return;
@@ -363,7 +530,9 @@ impl Browser {
                         path: entry.path,
                     }),
                     EntryKind::Video => {
-                        let src = self.sources.borrow()[source].source.clone();
+                        let Some(src) = self.slot_source(source) else {
+                            return;
+                        };
                         if let Some(play) = self.on_play.borrow().as_ref() {
                             play(src, entry.path);
                         }
@@ -376,7 +545,8 @@ impl Browser {
     fn up(self: &Rc<Self>) {
         let location = self.location.borrow().clone();
         if let Location::Folder { source, path } = location {
-            self.navigate(match path.parent() {
+            let parent = path.parent().filter(|_| path != self.slot_top(source));
+            self.navigate(match parent {
                 Some(parent) => Location::Folder {
                     source,
                     path: parent,
@@ -407,6 +577,13 @@ impl Browser {
         w.set_action_text(SharedString::new());
         w.set_summary(SharedString::new());
         w.set_sort_label(self.sort.get().label().into());
+        w.set_unsaved(matches!(
+            location,
+            Location::Folder {
+                source: Slot::Unsaved,
+                ..
+            }
+        ));
         self.update_resume_label();
 
         match location {
@@ -415,11 +592,12 @@ impl Browser {
                 self.show_sources();
             }
             Location::Folder { source, path } => {
-                let sources = self.sources.borrow();
-                let Some(slot) = sources.get(source) else {
+                let Some(src) = self.slot_source(source) else {
                     return;
                 };
-                let crumbs = crumbs(&slot.source.source.display_name(), &path);
+                let top = self.slot_top(source);
+                let relative = below(&top, &path).unwrap_or_default();
+                let crumbs = crumbs(&self.slot_name(source), &relative);
                 w.set_title(crumbs.last().cloned().unwrap_or_default());
                 w.set_crumbs(ModelRc::new(VecModel::from(crumbs)));
                 w.set_can_go_up(true);
@@ -427,7 +605,6 @@ impl Browser {
                 w.set_loading(true);
                 w.set_items(ModelRc::default());
 
-                let src = slot.source.clone();
                 let id = src.id;
                 let this = Rc::downgrade(self);
                 let folder = path.clone();
@@ -539,21 +716,16 @@ impl Browser {
         w.set_summary(view.summary().into());
         w.set_action_text(view.action_label(&entries).unwrap_or_default().into());
         self.action.set(view.action.as_ref().map(|a| a.index()));
-        if let Some(thumbs) = &thumbs {
-            let slot = self
-                .sources
-                .borrow()
+        if let Some(thumbs) = &thumbs
+            && let Some(src) = self.source_by_id(source).map(|s| s.source)
+        {
+            let location = self.location_of(source, folder);
+            let files: Vec<_> = entries
                 .iter()
-                .find(|s| s.source.id == source)
-                .map(|s| (s.source.source.clone(), s.location.clone()));
-            if let Some((src, location)) = slot {
-                let files: Vec<_> = entries
-                    .iter()
-                    .filter(|e| e.kind == EntryKind::Video)
-                    .map(|e| e.path.clone())
-                    .collect();
-                thumbs.want_folder(source, &src, &location, &files);
-            }
+                .filter(|e| e.kind == EntryKind::Video)
+                .map(|e| e.path.clone())
+                .collect();
+            thumbs.want_folder(source, &src, &location, &files);
         }
         *self.entries.borrow_mut() = entries;
         w.set_items(ModelRc::new(VecModel::from(items)));
@@ -566,12 +738,15 @@ impl Browser {
         }
     }
 
-    /// Goes to the folder at breadcrumb `index`: 0 is the source's root.
+    /// Goes to the folder at breadcrumb `index`: 0 is the source's root
+    /// (or the top of a folder opened without a library).
     fn crumb(self: &Rc<Self>, index: usize) {
         let location = self.location.borrow().clone();
         if let Location::Folder { source, path } = location {
-            let mut target = SourcePath::root();
-            for segment in path.segments().take(index) {
+            let top = self.slot_top(source);
+            let relative = below(&top, &path).unwrap_or_default();
+            let mut target = top;
+            for segment in relative.segments().take(index) {
                 match target.join(segment) {
                     Ok(p) => target = p,
                     Err(_) => return,
@@ -604,7 +779,7 @@ impl Browser {
     fn rerender(&self) {
         let location = self.location.borrow().clone();
         if let Location::Folder { source, path } = location {
-            let Some(id) = self.sources.borrow().get(source).map(|s| s.source.id) else {
+            let Some(id) = self.slot_source(source).map(|s| s.id) else {
                 return;
             };
             let entries = self.entries.borrow().clone();
@@ -622,7 +797,7 @@ impl Browser {
                 .default_playback_settings()
                 .and_then(|s| self.store.set_default_resume(!s.resume)),
             Location::Folder { source, path } => {
-                let Some(id) = self.sources.borrow().get(*source).map(|s| s.source.id) else {
+                let Some(id) = self.slot_source(*source).map(|s| s.id) else {
                     return;
                 };
                 self.store.folder_overrides(id).and_then(|o| {
@@ -651,7 +826,7 @@ impl Browser {
                 format!("Resume: {}", on_off(s.resume))
             }
             Location::Folder { source, path } => {
-                let Some(id) = self.sources.borrow().get(*source).map(|s| s.source.id) else {
+                let Some(id) = self.slot_source(*source).map(|s| s.id) else {
                     return;
                 };
                 let own = self
@@ -724,6 +899,17 @@ fn normalize_location(path: &str) -> Option<String> {
     })
 }
 
+/// `path` relative to `top`, if it is `top` or inside it.
+fn below(top: &SourcePath, path: &SourcePath) -> Option<SourcePath> {
+    let mut rest = path.segments();
+    for segment in top.segments() {
+        if rest.next()? != segment {
+            return None;
+        }
+    }
+    rest.try_fold(SourcePath::root(), |p, s| p.join(s).ok())
+}
+
 /// Breadcrumb segments for a folder: the source's name, then the folders.
 fn crumbs(source_name: &str, path: &SourcePath) -> Vec<SharedString> {
     std::iter::once(source_name)
@@ -767,6 +953,16 @@ mod tests {
             assert_eq!(normalize_location(r"\\nas\share\").unwrap(), r"\\nas\share");
             assert_eq!(normalize_location(r"C:\").unwrap(), r"C:\");
         }
+    }
+
+    #[test]
+    fn below_strips_the_top_folder() {
+        let p = |s: &str| SourcePath::parse(s).unwrap();
+        assert_eq!(below(&p("C:/TV"), &p("C:/TV/Show/S1")), Some(p("Show/S1")));
+        assert_eq!(below(&p("C:/TV"), &p("C:/TV")), Some(SourcePath::root()));
+        assert_eq!(below(&SourcePath::root(), &p("a/b")), Some(p("a/b")));
+        assert_eq!(below(&p("C:/TV"), &p("C:/TVshows/a")), None);
+        assert_eq!(below(&p("C:/TV/Show"), &p("C:/TV")), None);
     }
 
     #[test]

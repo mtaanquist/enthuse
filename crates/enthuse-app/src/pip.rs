@@ -146,6 +146,11 @@ impl Pip {
     }
 
     /// The browser window shown while PiP is on.
+    /// Whether the main window is the PiP player now.
+    pub fn is_active(&self) -> bool {
+        self.saved.get().is_some()
+    }
+
     pub fn side(&self) -> &BrowserWindow {
         &self.side
     }
