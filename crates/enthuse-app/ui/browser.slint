@@ -56,7 +56,6 @@ export global BrowserModel {
 
     callback up();
     callback activate(int);
-    callback remove(int);
     callback add-source(string);
     callback cycle-resume();
     callback cycle-sort();
@@ -299,7 +298,7 @@ export component FileRow inherits Rectangle {
         visible: root.removable;
         enabled: root.removable;
         icon: Icons.close;
-        label: "Remove source";
+        label: "Remove library";
         clicked => { root.remove(); }
     }
 }
@@ -473,6 +472,8 @@ component Notice inherits VerticalLayout {
 
 export component BrowserPage inherits Rectangle {
     property <bool> adding;
+    // Libraries are arranged and removed in Settings.
+    callback manage-libraries();
 
     // Placeholders show only when loading takes a while.
     property <bool> slow-load;
@@ -572,18 +573,18 @@ export component BrowserPage inherits Rectangle {
                 clicked => { BrowserModel.primary-action(); }
             }
 
-            // The default resume setting, until Settings exists (#69).
-            if BrowserModel.at-sources: PillButton {
+            if BrowserModel.at-sources && BrowserModel.items.length > 0: PillButton {
                 y: (parent.height - self.height) / 2;
-                text: BrowserModel.resume-label;
-                clicked => { BrowserModel.cycle-resume(); }
+                icon: Icons.settings;
+                text: "Manage";
+                clicked => { root.manage-libraries(); }
             }
 
             if BrowserModel.at-sources: PillButton {
                 y: (parent.height - self.height) / 2;
                 variant: root.adding ? ButtonVariant.outline : ButtonVariant.primary;
                 icon: root.adding ? Icons.close : Icons.add;
-                text: root.adding ? "Cancel" : "Add source";
+                text: root.adding ? "Cancel" : "Add library";
                 clicked => { root.adding = !root.adding; }
             }
         }
@@ -652,9 +653,7 @@ export component BrowserPage inherits Rectangle {
 
             if !BrowserModel.loading && BrowserModel.error == "" && BrowserModel.items.length > 0 && (BrowserModel.view-mode == 0 || BrowserModel.at-sources): FileList {
                 items: BrowserModel.items;
-                removable: BrowserModel.at-sources;
                 activate(i) => { BrowserModel.activate(i); }
-                remove(i) => { BrowserModel.remove(i); }
             }
 
             if !BrowserModel.loading && BrowserModel.error == "" && BrowserModel.items.length > 0 && BrowserModel.view-mode == 1 && !BrowserModel.at-sources: grid := ScrollView {

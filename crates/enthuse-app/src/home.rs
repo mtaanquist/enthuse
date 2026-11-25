@@ -16,7 +16,9 @@ use slint::{ComponentHandle, Model, ModelRc, VecModel, Weak};
 use crate::browser::{Browser, Library, SourceRef};
 use crate::nav::Nav;
 use crate::thumbs::{Thumbs, thumb_id};
-use crate::{AppWindow, BrowserWindow, ContinueItem, HomeModel, SourceIcon, SourceTileItem, bg};
+use crate::{
+    AppWindow, BrowserWindow, ContinueItem, HomeModel, Section, SourceIcon, SourceTileItem, bg,
+};
 
 /// Cards in the "Continue watching" row.
 const CONTINUE_LIMIT: usize = 4;
@@ -34,6 +36,9 @@ pub struct Home {
     thumbs: RefCell<Option<Rc<Thumbs>>>,
     /// Shown source tiles, for marking offline ones when the check returns.
     tiles: Rc<VecModel<SourceTileItem>>,
+    /// The index in `Browser::sources` of each tile: libraries left off
+    /// Home have none.
+    shown: RefCell<Vec<usize>>,
     /// What each favourite folder tile opens.
     favorites: RefCell<Vec<(SourceId, SourcePath)>>,
     /// Last reachability result per source: true when offline.
@@ -52,7 +57,12 @@ macro_rules! wire_callbacks {
         let h = $home.clone();
         model.on_play(move |i| h.play(i as usize));
         let h = $home.clone();
-        model.on_open_source(move |i| h.browser.open_source(i as usize));
+        model.on_open_source(move |i| {
+            let index = h.shown.borrow().get(i as usize).copied();
+            if let Some(index) = index {
+                h.browser.open_source(index);
+            }
+        });
         let h = $home.clone();
         model.on_add_source(move || h.pick_folder());
         // Rebuilds the tiles, so it waits for the click (and the menu that
@@ -61,7 +71,9 @@ macro_rules! wire_callbacks {
         model.on_toggle_favorite(move |i| {
             let h = h.clone();
             slint::Timer::single_shot(Duration::ZERO, move || {
-                let index = i as usize;
+                let Some(index) = h.shown.borrow().get(i as usize).copied() else {
+                    return;
+                };
                 let favorite = h.browser.sources().get(index).is_some_and(|s| s.favorite);
                 h.browser.set_source_favorite(index, !favorite);
             });
@@ -100,6 +112,7 @@ impl Home {
             cards: Rc::new(VecModel::default()),
             thumbs: Default::default(),
             tiles: Rc::new(VecModel::default()),
+            shown: Default::default(),
             favorites: Default::default(),
             offline: Default::default(),
             checking: Default::default(),
@@ -203,10 +216,14 @@ impl Home {
         *self.items.borrow_mut() = items;
 
         let sources = self.browser.sources();
-        let tiles: Vec<_> = (0..sources.len()).map(|i| self.tile(&sources, i)).collect();
+        let shown: Vec<usize> = (0..sources.len()).filter(|&i| !sources[i].hidden).collect();
+        let tiles: Vec<_> = shown.iter().map(|&i| self.tile(&sources, i)).collect();
         self.tiles.set_vec(tiles);
+        *self.shown.borrow_mut() = shown;
 
-        let favorites = self.browser.favorites();
+        let mut favorites = self.browser.favorites();
+        // Left off Home means all of Home, favourites too.
+        favorites.retain(|(library, _)| !library.hidden);
         let favorite_tiles: Vec<_> = {
             let offline = self.offline.borrow();
             favorites
@@ -262,12 +279,15 @@ impl Home {
         let Some(index) = sources.iter().position(|s| s.source.id == id) else {
             return;
         };
+        let Some(row) = self.shown.borrow().iter().position(|&i| i == index) else {
+            return; // Not on Home.
+        };
         if self
             .tiles
-            .row_data(index)
+            .row_data(row)
             .is_some_and(|t| t.offline != offline)
         {
-            self.tiles.set_row_data(index, self.tile(&sources, index));
+            self.tiles.set_row_data(row, self.tile(&sources, index));
         }
     }
 
@@ -286,6 +306,19 @@ impl Home {
         }
     }
 
+    /// Switches the window the browser shows in to Browse.
+    fn show_browse(&self) {
+        let side = self.side.borrow().as_ref().and_then(|w| w.upgrade());
+        match side {
+            Some(s) if s.window().is_visible() => s.set_section(Section::Browse),
+            _ => {
+                if let Some(m) = self.main.upgrade() {
+                    m.set_section(Section::Browse);
+                }
+            }
+        }
+    }
+
     fn play(&self, index: usize) {
         let Some((source, path)) = self.items.borrow().get(index).cloned() else {
             return;
@@ -295,12 +328,13 @@ impl Home {
         }
     }
 
-    /// Asks for a folder with the system dialog and adds it as a source.
+    /// Asks for a folder with the system dialog, adds it as a library and
+    /// opens it in Browse, in the window that asked.
     fn pick_folder(self: &Rc<Self>) {
         if self.picking.replace(true) {
             return; // Already open.
         }
-        let mut dialog = rfd::AsyncFileDialog::new().set_title("Add source");
+        let mut dialog = rfd::AsyncFileDialog::new().set_title("Add library");
         // Owned by the window that asked, so it stays on top of it.
         let side = self.side.borrow().as_ref().and_then(|w| w.upgrade());
         let main = self.main.upgrade();
@@ -318,8 +352,11 @@ impl Home {
             let folder = picked.await;
             if let Some(this) = this.upgrade() {
                 this.picking.set(false);
-                if let Some(folder) = folder {
-                    this.browser.add_local(&folder.path().to_string_lossy());
+                if let Some(folder) = folder
+                    && let Some(index) = this.browser.add_local(&folder.path().to_string_lossy())
+                {
+                    this.browser.open_source(index);
+                    this.show_browse();
                 }
             }
         });

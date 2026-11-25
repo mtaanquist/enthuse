@@ -84,6 +84,8 @@ pub struct SavedSource {
     pub location: String,
     /// Listed before the others (#59).
     pub favorite: bool,
+    /// Left off Home; still in the sidebar, Browse and Settings (#59).
+    pub hidden: bool,
 }
 
 /// Playback state of one file.
@@ -164,7 +166,7 @@ impl Store {
     /// user's order, then the rest oldest first.
     pub fn sources(&self) -> Result<Vec<SavedSource>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, kind, name, location, favorite FROM sources
+            "SELECT id, kind, name, location, favorite, hidden FROM sources
              ORDER BY favorite DESC, sort_order IS NULL, sort_order, created_at, id",
         )?;
         let rows = stmt.query_map([], |r| {
@@ -174,6 +176,7 @@ impl Store {
                 name: r.get(2)?,
                 location: r.get(3)?,
                 favorite: r.get(4)?,
+                hidden: r.get(5)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -193,6 +196,15 @@ impl Store {
         self.conn.execute(
             "UPDATE sources SET favorite = ?2 WHERE id = ?1",
             params![id.0, favorite],
+        )?;
+        Ok(())
+    }
+
+    /// Shows a source on Home, or leaves it off.
+    pub fn set_source_hidden(&self, id: SourceId, hidden: bool) -> Result<()> {
+        self.conn.execute(
+            "UPDATE sources SET hidden = ?2 WHERE id = ?1",
+            params![id.0, hidden],
         )?;
         Ok(())
     }
@@ -827,6 +839,12 @@ mod tests {
         assert!(s.sources().unwrap()[0].favorite);
 
         s.rename_source(a, "Films").unwrap();
+        assert_eq!(names(&s), ["B", "C", "Films"]);
+
+        // Hidden from Home, but still listed, in its place.
+        assert!(!s.sources().unwrap()[1].hidden);
+        s.set_source_hidden(c, true).unwrap();
+        assert!(s.sources().unwrap()[1].hidden);
         assert_eq!(names(&s), ["B", "C", "Films"]);
 
         // A source added later goes after the ordered ones.

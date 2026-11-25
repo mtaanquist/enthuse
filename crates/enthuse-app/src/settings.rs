@@ -85,6 +85,11 @@ macro_rules! wire_callbacks {
             later(move || s.browser.remove_source(i as usize));
         });
         let s = $settings.clone();
+        model.on_library_show(move |i, show| {
+            let s = s.clone();
+            later(move || s.browser.set_source_hidden(i as usize, !show));
+        });
+        let s = $settings.clone();
         model.on_library_resume(move |i, choice| s.set_library_resume(i as usize, choice));
         let s = $settings.clone();
         model.on_refresh(move || s.refresh());
@@ -197,6 +202,7 @@ impl Settings {
                     source,
                     location,
                     favorite,
+                    hidden,
                 } = library;
                 let own = self
                     .store
@@ -214,6 +220,7 @@ impl Settings {
                     location: location.as_str().into(),
                     network: is_network_location(location),
                     favorite: *favorite,
+                    hidden: *hidden,
                     resume: match own {
                         None => 0,
                         Some(true) => 1,

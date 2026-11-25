@@ -40,10 +40,12 @@ pub fn migrations() -> Migrations<'static> {
             );",
         ),
         // 3: libraries (#59): favourites listed first, the user's order
-        // (NULL: in the order added), and favourite folders inside them.
+        // (NULL: in the order added), libraries left off Home, and
+        // favourite folders inside them.
         M::up(
             "ALTER TABLE sources ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0;
             ALTER TABLE sources ADD COLUMN sort_order INTEGER;
+            ALTER TABLE sources ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0;
             CREATE TABLE favorite_folders (
                 source_id  INTEGER NOT NULL REFERENCES sources (id) ON DELETE CASCADE,
                 path       TEXT NOT NULL,

@@ -525,7 +525,7 @@ export component HomePage inherits Rectangle {
                     spacing: Theme.space-12;
 
                     SectionHeading {
-                        text: "Sources";
+                        text: "Libraries";
                     }
 
                     PillButton {
@@ -536,7 +536,7 @@ export component HomePage inherits Rectangle {
 
                     PillButton {
                         icon: Icons.add;
-                        text: "Add source";
+                        text: "Add library";
                         clicked => { HomeModel.add-source(); }
                     }
                 }
@@ -603,7 +603,7 @@ export component HomePage inherits Rectangle {
                             size: 48px;
                             variant: ButtonVariant.primary;
                             icon: Icons.add;
-                            text: "Add source";
+                            text: "Add library";
                             clicked => { HomeModel.add-source(); }
                         }
                     }

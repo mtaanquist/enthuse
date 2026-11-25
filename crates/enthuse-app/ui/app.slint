@@ -17,6 +17,7 @@ export { BrowserModel, BrowserItem, ItemKind, ItemBadge } from "browser.slint";
 export { HomeModel, ContinueItem, SourceTileItem, SourceIcon } from "home.slint";
 export { PlayerModel, PlayerLayout, TrackItem } from "player.slint";
 export { SettingsModel, OverrideItem, LibraryItem } from "settings.slint";
+export { SidebarModel } from "components/sidebar.slint";
 export { RecentModel } from "recent.slint";
 
 export { Section }
@@ -500,7 +501,11 @@ component AppScreens inherits Rectangle {
             }
         }
 
-        if root.section == Section.browse: BrowserPage { }
+        if root.section == Section.browse: BrowserPage {
+            manage-libraries => {
+                root.section = Section.settings;
+            }
+        }
 
         if root.section == Section.recent: RecentPage { }
 

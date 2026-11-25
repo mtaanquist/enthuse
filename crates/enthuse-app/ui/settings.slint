@@ -26,6 +26,8 @@ export struct LibraryItem {
     location: string,
     network: bool,
     favorite: bool,
+    // Left off Home; still in Libraries and here.
+    hidden: bool,
     // Its own resume setting: 0 same as Playback, 1 on, 2 off.
     resume: int,
     // The first and last index of its group (favourites, or the rest): it
@@ -68,6 +70,8 @@ export global SettingsModel {
     callback library-move(int, int);
     // Forgets the library and its watch state.
     callback library-remove(int);
+    // Shows it on Home (true) or leaves it off.
+    callback library-show(int, bool);
     // 0 same as Playback, 1 on, 2 off.
     callback library-resume(int, int);
     // Asks Rust to load everything again, e.g. when the screen shows.
@@ -413,7 +417,7 @@ component LibraryRow inherits Rectangle {
             RowText {
                 horizontal-stretch: 1;
                 title: root.item.name;
-                description: root.item.location;
+                description: root.item.hidden ? "Not on Home · " + root.item.location : root.item.location;
             }
 
             IconButton {
@@ -479,6 +483,20 @@ component LibraryRow inherits Rectangle {
                     text: "Rename";
                     enabled: name-field.text != root.item.name;
                     clicked => { SettingsModel.library-rename(root.index, name-field.text); }
+                }
+            }
+
+            // Full width of the card, like the other switch rows.
+            Rectangle {
+                height: show-row.preferred-height;
+
+                show-row := SwitchRow {
+                    x: -Theme.space-20;
+                    width: parent.width + 2 * Theme.space-20;
+                    title: "Show on Home";
+                    description: "Off: it is still under Libraries in the sidebar.";
+                    on: !root.item.hidden;
+                    toggled(on) => { SettingsModel.library-show(root.index, on); }
                 }
             }
 
@@ -581,7 +599,7 @@ export component SettingsPage inherits Rectangle {
                     padding: Theme.space-20;
 
                     Text {
-                        text: "No libraries yet. Add a folder or network share from Home.";
+                        text: "No libraries yet. Add a folder or network share from Home or Libraries.";
                         color: Theme.text-muted;
                         font-size: Theme.meta-size;
                         wrap: word-wrap;

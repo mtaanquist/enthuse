@@ -19,7 +19,9 @@ use enthuse_core::time::format_minutes;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel, Weak};
 
 use crate::thumbs::{Thumbs, thumb_id};
-use crate::{AppWindow, BrowserItem, BrowserModel, BrowserWindow, ItemBadge, ItemKind, bg};
+use crate::{
+    AppWindow, BrowserItem, BrowserModel, BrowserWindow, ItemBadge, ItemKind, SidebarModel, bg,
+};
 
 /// How long a message from [`Browser::show_error`] stays.
 const TOAST_TIME: std::time::Duration = std::time::Duration::from_secs(5);
@@ -50,6 +52,8 @@ pub struct Library {
     pub location: String,
     /// Listed first (#59).
     pub favorite: bool,
+    /// Left off Home; still in Libraries and Settings.
+    pub hidden: bool,
 }
 
 /// A source the browser can be in.
@@ -102,8 +106,6 @@ macro_rules! wire_callbacks {
         let b = $browser.clone();
         model.on_up(move || b.up());
         let b = $browser.clone();
-        model.on_remove(move |i| b.remove_source(i as usize));
-        let b = $browser.clone();
         model.on_cycle_resume(move || b.cycle_resume());
         let b = $browser.clone();
         model.on_cycle_sort(move || b.cycle_sort());
@@ -115,6 +117,10 @@ macro_rules! wire_callbacks {
         model.on_retry(move || b.refresh());
         let b = $browser.clone();
         model.on_add_library(move || b.save_unsaved());
+        let b = $browser.clone();
+        $window
+            .global::<SidebarModel>()
+            .on_show_libraries(move || b.show_libraries());
         let b = $browser.clone();
         model.on_toggle_favorite(move || b.toggle_favorite());
         let b = $browser.clone();
@@ -402,6 +408,18 @@ impl Browser {
         self.changed();
     }
 
+    /// Shows the library at `index` on Home, or leaves it off. It stays in
+    /// Libraries and Settings either way.
+    pub fn set_source_hidden(self: &Rc<Self>, index: usize, hidden: bool) {
+        let Some(id) = self.sources.borrow().get(index).map(|s| s.source.id) else {
+            return;
+        };
+        if let Err(err) = self.store.set_source_hidden(id, hidden) {
+            self.show_error(&format!("Cannot save this setting: {err}"));
+        }
+        self.reload_sources();
+    }
+
     /// Whether the folder at `path` of library `index` is a favourite: the
     /// library itself at its root.
     fn is_favorite(&self, index: usize, path: &SourcePath) -> bool {
@@ -581,6 +599,11 @@ impl Browser {
         self.changed();
     }
 
+    /// Shows the list of libraries (Libraries in the sidebar, clicked again).
+    pub fn show_libraries(self: &Rc<Self>) {
+        self.navigate(Location::Sources);
+    }
+
     /// Shows the root folder of the source at `index`.
     pub fn open_source(self: &Rc<Self>, index: usize) {
         if index < self.sources.borrow().len() {
@@ -608,7 +631,7 @@ impl Browser {
         let id = match self.store.add_source(LOCAL, &source.display_name(), path) {
             Ok(id) => id,
             Err(err) => {
-                self.show_error(&format!("Cannot save this source: {err}"));
+                self.show_error(&format!("Cannot save this library: {err}"));
                 return None;
             }
         };
@@ -636,7 +659,7 @@ impl Browser {
             Ok(saved) => saved,
             Err(err) => {
                 *self.startup_error.borrow_mut() =
-                    Some(format!("Cannot load saved sources: {err}"));
+                    Some(format!("Cannot load the libraries: {err}"));
                 return;
             }
         };
@@ -651,6 +674,7 @@ impl Browser {
                 },
                 location: s.location,
                 favorite: s.favorite,
+                hidden: s.hidden,
             })
             .collect();
     }
@@ -707,7 +731,7 @@ impl Browser {
             return;
         };
         if let Err(err) = self.store.remove_source(id) {
-            self.show_error(&format!("Cannot remove this source: {err}"));
+            self.show_error(&format!("Cannot remove this library: {err}"));
             return;
         }
         self.sources.borrow_mut().remove(index);
@@ -851,7 +875,11 @@ impl Browser {
             .iter()
             .map(|s| BrowserItem {
                 label: s.source.name.as_str().into(),
-                detail: s.location.as_str().into(),
+                detail: if s.hidden {
+                    format!("Not on Home · {}", s.location).into()
+                } else {
+                    s.location.as_str().into()
+                },
                 kind: ItemKind::Source,
                 badge: ItemBadge::None,
                 badge_text: SharedString::new(),
@@ -859,12 +887,12 @@ impl Browser {
                 thumbnail: Default::default(),
             })
             .collect();
-        w.set_title("Sources".into());
+        w.set_title("Libraries".into());
         w.set_crumbs(ModelRc::default());
         w.set_summary(match items.len() {
             0 => SharedString::new(),
-            1 => "1 source".into(),
-            n => format!("{n} sources").into(),
+            1 => "1 library".into(),
+            n => format!("{n} libraries").into(),
         });
         w.set_can_go_up(false);
         w.set_at_sources(true);
