@@ -56,13 +56,15 @@ Sidebar, then:
 1. Title "Home" and a search button.
 2. "Continue watching": up to 4 cards in one row, most recent first. Hidden when empty.
 3. "Favourites", when there are any: starred libraries, then starred folders (with "Library / parent" under the name), as SourceTiles. Hidden when empty.
-4. "Libraries" with "Manage" (to Settings) and "Add library" buttons: grid of SourceTiles, 3 per row, favourites first, then the user's order. Libraries with "Show on Home" off are left out of Home altogether, Favourites too.
+4. "Libraries" with "Manage" (to the Libraries page) and "Add library" buttons: grid of SourceTiles, 3 per row, favourites first, then the user's order. Libraries with "Show on Home" off are left out of Home altogether, Favourites too.
 
-Tapping a card resumes playback. Tapping a library opens it in the folder browser. A library tile's menu has "Add to / Remove from favourites" and "Manage libraries…"; a Favourites tile's menu only unstars it. Home is for watching: arranging libraries happens in Settings.
+Tapping a card resumes playback. Tapping a library opens it in the folder browser. A library tile's menu has "Add to / Remove from favourites" and "Manage libraries…"; a Favourites tile's menu only unstars it. Home is for watching: arranging libraries happens on the Libraries page.
 
 ### Libraries
 
-The sidebar's Libraries item opens the list of all libraries, also those left off Home ("Not on Home" under the name), with "Manage" and "Add library". Picking one opens the folder browser at its root. Coming back to Libraries from another section returns to the folder last browsed; clicking it again while there goes to the list. A library just added opens right away.
+The sidebar's Libraries item opens the list of all libraries, also those left off Home ("Not on Home" under the path), with "Add library". Libraries are arranged here. Each row has a drag handle, its name and path, a star, up and down buttons (within its group: favourites stay first) and a settings button. Tapping the row opens the folder browser at its root. Drag the handle to reorder; with a finger, rest on it a moment first, since a quick swipe scrolls the list.
+
+The settings button opens the library's dialog over a scrim: its name (empty goes back to the folder's name), "Show on Home", its own "Resume where you left off" (Same as Playback, On, Off), and "Remove library", which asks again since it forgets the watch state. Changes save at once, the name on Done or Enter. Escape, the scrim or Done close it. Later sources (SMB address and credentials) add their settings here. Coming back to Libraries from another section returns to the folder last browsed; clicking it again while there goes to the list. A library just added opens right away.
 
 ### Folder browser
 
@@ -116,14 +118,13 @@ Sidebar, then the title "Recent" and up to 50 recently played files, watched or 
 ### Settings
 
 Sidebar, then one column (at most 820px wide) of grouped cards:
-1. Libraries: one row per library, favourites first: a drag handle, its name and path, a star, up and down buttons (within its group: favourites stay first) and a button that opens its settings in place: name (empty goes back to the folder's name), "Show on Home", its own "Resume where you left off" (Same as Playback, On, Off) and "Remove library", which asks again since it forgets the watch state. Drag the handle to reorder; with a finger, rest on it a moment first, since a quick swipe scrolls the page.
-2. Playback:
+1. Playback:
    - "Resume where you left off" switch. It is the global default; folders can override it from the Resume button in Browse.
    - "Play the next file automatically" switch. Off: no Up next card, and playback returns to the browser when a file ends. The next button still works.
    - "Mark as watched": a segmented control (Percentage, Time left, Whichever first) and steppers for the share played (50% to 98%) and the time left (30 s to 15 min). Playing to the end always counts. The time-left test waits until at most a quarter of the file is left, so a short clip is not marked watched early.
-3. Folder settings: every folder with its own settings, as "Kids" over "NAS / Shows / Kids, resume off", with a "Clear" button. Editing stays in the browser.
-4. Thumbnails: "Thumbnails for network shares" switch (`network_thumbnails`).
-5. About: version, GPL-3.0, "Not affiliated with Firecore or Infuse."
+2. Folder settings: every folder with its own settings, as "Kids" over "NAS / Shows / Kids, resume off", with a "Clear" button. Editing stays in the browser.
+3. Thumbnails: "Thumbnails for network shares" switch (`network_thumbnails`).
+4. About: version, GPL-3.0, "Not affiliated with Firecore or Infuse."
 
 Every change is saved at once; there is no Save button.
 

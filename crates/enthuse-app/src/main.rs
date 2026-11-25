@@ -10,6 +10,7 @@ mod bg;
 mod browser;
 mod external;
 mod home;
+mod libraries;
 mod nav;
 mod pip;
 mod playback;
@@ -129,6 +130,7 @@ fn run(start: Start, self_test: bool) -> Result<ExitCode, Box<dyn std::error::Er
     let recent = recent::Recent::new(&window, store.clone(), browser.clone());
     recent.set_nav(&nav);
     let settings = settings::Settings::new(&window, store.clone(), browser.clone());
+    let libraries = libraries::Libraries::new(&window, store.clone(), browser.clone());
     {
         let nav = nav.clone();
         settings.on_change(move || nav.reload_settings());
@@ -189,6 +191,7 @@ fn run(start: Start, self_test: bool) -> Result<ExitCode, Box<dyn std::error::Er
     playback.attach_side(pip.side());
     home.attach_side(pip.side());
     settings.attach_side(pip.side());
+    libraries.attach_side(pip.side());
     recent.attach_side(pip.side());
     {
         let (pip, playback) = (pip.clone(), playback.clone());

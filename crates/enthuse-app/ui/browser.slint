@@ -7,6 +7,7 @@ import { Theme, Icons, KeyFocus } from "theme.slint";
 import { ButtonVariant, IconButton, PillButton } from "components/buttons.slint";
 import { ButtonBehavior, FocusGrid } from "components/behavior.slint";
 import { SegmentedControl } from "components/segmented-control.slint";
+import { LibraryList } from "libraries.slint";
 import { TipText } from "components/tip-text.slint";
 
 // Kinds and badges, kept in step with browser.rs.
@@ -472,8 +473,6 @@ component Notice inherits VerticalLayout {
 
 export component BrowserPage inherits Rectangle {
     property <bool> adding;
-    // Libraries are arranged and removed in Settings.
-    callback manage-libraries();
 
     // Placeholders show only when loading takes a while.
     property <bool> slow-load;
@@ -573,13 +572,6 @@ export component BrowserPage inherits Rectangle {
                 clicked => { BrowserModel.primary-action(); }
             }
 
-            if BrowserModel.at-sources && BrowserModel.items.length > 0: PillButton {
-                y: (parent.height - self.height) / 2;
-                icon: Icons.settings;
-                text: "Manage";
-                clicked => { root.manage-libraries(); }
-            }
-
             if BrowserModel.at-sources: PillButton {
                 y: (parent.height - self.height) / 2;
                 variant: root.adding ? ButtonVariant.outline : ButtonVariant.primary;
@@ -651,7 +643,10 @@ export component BrowserPage inherits Rectangle {
                 back => { BrowserModel.up(); }
             }
 
-            if !BrowserModel.loading && BrowserModel.error == "" && BrowserModel.items.length > 0 && (BrowserModel.view-mode == 0 || BrowserModel.at-sources): FileList {
+            // The Libraries page: arranged here (#59).
+            if BrowserModel.at-sources && BrowserModel.items.length > 0: LibraryList { }
+
+            if !BrowserModel.loading && BrowserModel.error == "" && BrowserModel.items.length > 0 && BrowserModel.view-mode == 0 && !BrowserModel.at-sources: FileList {
                 items: BrowserModel.items;
                 activate(i) => { BrowserModel.activate(i); }
             }

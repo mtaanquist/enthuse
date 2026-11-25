@@ -1,0 +1,397 @@
+// The Libraries page (#59): every library, also those left off Home. They
+// are arranged here (drag or move them, star them), and each one's
+// settings open in a dialog: its name, whether it shows on Home, resume,
+// and removing it. Rust fills LibrariesModel for each window.
+
+import { LineEdit, ScrollView } from "std-widgets.slint";
+import { Theme, Icons } from "theme.slint";
+import { ButtonVariant, IconButton, PillButton } from "components/buttons.slint";
+import { ButtonBehavior } from "components/behavior.slint";
+import { RowText, SwitchRow, TextSegments } from "components/controls.slint";
+
+// A saved library, in list order: favourites first.
+export struct LibraryItem {
+    // Its database id.
+    id: int,
+    name: string,
+    // Folder path or share.
+    location: string,
+    network: bool,
+    favorite: bool,
+    // Left off Home.
+    hidden: bool,
+    // Its own resume setting: 0 same as Playback, 1 on, 2 off.
+    resume: int,
+    // The first and last index of its group (favourites, or the rest): it
+    // can only be moved within it.
+    group-first: int,
+    group-last: int,
+}
+
+export global LibrariesModel {
+    in property <[LibraryItem]> libraries;
+    // The global resume setting, for "Same as Playback (on)".
+    in property <bool> resume-default: true;
+    // A library's dialog is open, and which library.
+    in property <bool> editing;
+    in property <LibraryItem> edited;
+
+    // Browse the library at this index.
+    callback open(int);
+    callback favorite(int);
+    // From the first index to the second, within its group.
+    callback move(int, int);
+    // Opens the dialog for the library at this index.
+    callback edit(int);
+    callback close-edit();
+    // For the library in the dialog. A new name; empty goes back to the
+    // folder's own name.
+    callback rename(string);
+    callback show-on-home(bool);
+    // 0 same as Playback, 1 on, 2 off.
+    callback resume(int);
+    // Forgets the library and its watch state.
+    callback remove();
+}
+
+// One library: drag handle, name and path (tap to browse it), favourite,
+// up and down, and its settings.
+component LibraryRow inherits Rectangle {
+    in property <LibraryItem> item;
+    in property <int> index;
+    in property <bool> dragged;
+    callback drag-start();
+    // How far the pointer moved since the last call.
+    callback drag-move(length);
+    callback drag-end();
+
+    min-height: 72px;
+    border-radius: Theme.radius-medium;
+    background: root.dragged ? Theme.surface-raised : behavior.has-hover ? Theme.surface : transparent;
+    drop-shadow-blur: root.dragged ? 24px : 0px;
+    drop-shadow-color: rgba(0, 0, 0, 0.45);
+
+    // Tap the row to browse the library; the buttons on top keep their own.
+    behavior := ButtonBehavior {
+        ring-radius: root.border-radius;
+        clicked => { LibrariesModel.open(root.index); }
+    }
+
+    HorizontalLayout {
+        padding-left: Theme.space-8;
+        padding-right: Theme.space-12;
+        padding-top: Theme.space-12;
+        padding-bottom: Theme.space-12;
+        spacing: Theme.space-8;
+
+        // Drag to reorder. With a finger, rest on it for a moment first:
+        // a quick swipe scrolls the list instead.
+        Rectangle {
+            width: Theme.touch-target;
+            height: Theme.touch-target;
+            y: (parent.height - self.height) / 2;
+
+            Image {
+                width: Theme.icon-size;
+                height: Theme.icon-size;
+                source: Icons.grip;
+                colorize: handle.has-hover || root.dragged ? Theme.text : Theme.text-muted;
+            }
+
+            handle := TouchArea {
+                mouse-cursor: root.dragged ? grabbing : grab;
+                pointer-event(event) => {
+                    if (event.kind == PointerEventKind.down) {
+                        root.drag-start();
+                    } else if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                        root.drag-end();
+                    }
+                }
+                // This area moves with the row, so its offset is on top of
+                // how far the row has moved already.
+                moved => { root.drag-move(self.mouse-y - self.pressed-y); }
+            }
+        }
+
+        // Fills the row's height, so `contain` centers it.
+        Image {
+            width: Theme.icon-size;
+            source: root.item.network ? Icons.server : Icons.drive;
+            colorize: Theme.accent;
+            image-fit: contain;
+        }
+
+        RowText {
+            horizontal-stretch: 1;
+            title: root.item.name;
+            description: root.item.hidden ? "Not on Home · " + root.item.location : root.item.location;
+        }
+
+        IconButton {
+            y: (parent.height - self.height) / 2;
+            border-width: 0px;
+            icon: root.item.favorite ? Icons.star-filled : Icons.star;
+            label: root.item.favorite ? "Remove " + root.item.name + " from favourites" : "Add " + root.item.name + " to favourites";
+            keep-focus: true;
+            clicked => { LibrariesModel.favorite(root.index); }
+        }
+
+        IconButton {
+            y: (parent.height - self.height) / 2;
+            border-width: 0px;
+            icon: Icons.chevron-up;
+            label: "Move " + root.item.name + " up";
+            enabled: root.index > root.item.group-first;
+            keep-focus: true;
+            clicked => { LibrariesModel.move(root.index, root.index - 1); }
+        }
+
+        IconButton {
+            y: (parent.height - self.height) / 2;
+            border-width: 0px;
+            icon: Icons.chevron-down;
+            label: "Move " + root.item.name + " down";
+            enabled: root.index < root.item.group-last;
+            keep-focus: true;
+            clicked => { LibrariesModel.move(root.index, root.index + 1); }
+        }
+
+        IconButton {
+            y: (parent.height - self.height) / 2;
+            icon: Icons.settings;
+            label: "Settings for " + root.item.name;
+            clicked => { LibrariesModel.edit(root.index); }
+        }
+    }
+}
+
+// The list of libraries. A row is dragged by its handle; the rows in
+// between slide over to make room.
+export component LibraryList inherits Rectangle {
+    // Dragging: from its index, to where it would land, and how far it
+    // has moved.
+    property <int> drag-from: -1;
+    property <int> drag-to: -1;
+    property <length> drag-dy;
+    // The height of a row, measured when a drag starts.
+    property <length> row-step: 72px;
+
+    // Where the row at `index` shows while another is dragged.
+    pure function slot(index: int) -> int {
+        if (root.drag-from < 0 || index == root.drag-from) {
+            return index;
+        }
+        if (root.drag-from < root.drag-to && index > root.drag-from && index <= root.drag-to) {
+            return index - 1;
+        }
+        if (root.drag-to < root.drag-from && index >= root.drag-to && index < root.drag-from) {
+            return index + 1;
+        }
+        index
+    }
+
+    ScrollView {
+        content-width: self.visible-width;
+        content-height: rows.preferred-height;
+
+        rows := VerticalLayout {
+            x: 0;
+            width: parent.visible-width;
+            alignment: start;
+            padding-bottom: Theme.space-48;
+            spacing: Theme.space-4;
+
+            for item[index] in LibrariesModel.libraries: Rectangle {
+                property <bool> dragged: index == root.drag-from;
+
+                height: max(72px, row.preferred-height);
+                z: self.dragged ? 1 : 0;
+
+                row := LibraryRow {
+                    height: parent.height;
+                    y: parent.dragged ? root.drag-dy : (root.slot(index) - index) * root.row-step;
+                    width: parent.width;
+                    animate y {
+                        duration: parent.dragged ? 0ms : Theme.hover-duration;
+                    }
+                    item: item;
+                    index: index;
+                    dragged: parent.dragged;
+                    drag-start => {
+                        root.row-step = max(1px, parent.height + Theme.space-4);
+                        root.drag-from = index;
+                        root.drag-to = index;
+                        root.drag-dy = 0;
+                    }
+                    drag-move(dy) => {
+                        if (root.drag-from == index) {
+                            root.drag-dy += dy;
+                            root.drag-to = clamp(index + round(root.drag-dy / root.row-step), item.group-first, item.group-last);
+                        }
+                    }
+                    drag-end => {
+                        if (root.drag-from == index && root.drag-to != index) {
+                            LibrariesModel.move(index, root.drag-to);
+                        }
+                        root.drag-from = -1;
+                        root.drag-to = -1;
+                        root.drag-dy = 0;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// A library's settings, over a scrim. Escape, the scrim or Done close it.
+// Changes save at once; the name saves on Done or Enter.
+export component LibraryDialog inherits Rectangle {
+    property <LibraryItem> item: LibrariesModel.edited;
+    property <bool> confirm-remove;
+
+    // Saves a changed name, then closes.
+    function done() {
+        if (name-field.text != root.item.name) {
+            LibrariesModel.rename(name-field.text);
+        }
+        LibrariesModel.close-edit();
+    }
+
+    background: rgba(0, 0, 0, 0.55);
+
+    // Clicks on the scrim close the dialog; the card keeps its own.
+    TouchArea {
+        clicked => { root.done(); }
+    }
+
+    // Holds the card, so Escape typed anywhere in it reaches this.
+    keys := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                root.done();
+                return accept;
+            }
+            reject
+        }
+
+    card := Rectangle {
+        width: min(root.width - 2 * Theme.space-24, 560px);
+        height: min(root.height - 2 * Theme.space-24, content.preferred-height);
+        border-radius: Theme.radius-large;
+        border-width: 1px;
+        border-color: Theme.line-strong;
+        background: Theme.surface-raised;
+        drop-shadow-blur: 32px;
+        drop-shadow-color: rgba(0, 0, 0, 0.5);
+        clip: true;
+        accessible-role: groupbox;
+        accessible-label: "Settings for " + root.item.name;
+
+        // Swallows clicks so they don't reach the scrim.
+        TouchArea { }
+
+        content := VerticalLayout {
+            padding: Theme.space-24;
+            spacing: Theme.space-20;
+
+            VerticalLayout {
+                spacing: Theme.space-4;
+
+                Text {
+                    text: root.item.name;
+                    color: Theme.text;
+                    font-size: Theme.section-size;
+                    font-weight: Theme.section-weight;
+                    overflow: elide;
+                }
+
+                Text {
+                    text: root.item.location;
+                    color: Theme.text-muted;
+                    font-size: Theme.meta-size;
+                    overflow: elide;
+                }
+            }
+
+            VerticalLayout {
+                spacing: Theme.space-8;
+
+                Text {
+                    text: "Name";
+                    color: Theme.text;
+                    font-size: Theme.body-size;
+                }
+
+                name-field := LineEdit {
+                    height: Theme.touch-target;
+                    font-size: Theme.body-size;
+                    text: root.item.name;
+                    placeholder-text: "Leave empty for the folder's name";
+                    accepted => { root.done(); }
+                }
+            }
+
+            // Full width of the card, like the switch rows in Settings.
+            Rectangle {
+                height: show-row.preferred-height;
+
+                show-row := SwitchRow {
+                    x: -Theme.space-24;
+                    width: parent.width + 2 * Theme.space-24;
+                    title: "Show on Home";
+                    description: "Off: it stays here, under Libraries.";
+                    on: !root.item.hidden;
+                    toggled(on) => { LibrariesModel.show-on-home(on); }
+                }
+            }
+
+            VerticalLayout {
+                spacing: Theme.space-12;
+
+                RowText {
+                    title: "Resume where you left off";
+                    description: "For this library and its folders, unless a folder has its own setting.";
+                }
+
+                TextSegments {
+                    segments: [LibrariesModel.resume-default ? "Same as Playback (on)" : "Same as Playback (off)", "On", "Off"];
+                    selected: root.item.resume;
+                    select(i) => { LibrariesModel.resume(i); }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: Theme.space-12;
+
+                PillButton {
+                    icon: Icons.close;
+                    variant: root.confirm-remove ? ButtonVariant.primary : ButtonVariant.outline;
+                    text: root.confirm-remove ? "Remove, and forget its watch state" : "Remove library";
+                    clicked => {
+                        if (root.confirm-remove) {
+                            LibrariesModel.remove();
+                        } else {
+                            root.confirm-remove = true;
+                        }
+                    }
+                }
+
+                if root.confirm-remove: PillButton {
+                    text: "Keep it";
+                    clicked => { root.confirm-remove = false; }
+                }
+
+                Rectangle { }
+
+                PillButton {
+                    variant: ButtonVariant.primary;
+                    text: "Done";
+                    clicked => { root.done(); }
+                }
+            }
+        }
+    }
+    }
+
+    init => { name-field.focus(); }
+}

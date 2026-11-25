@@ -47,6 +47,8 @@ export global HomeModel {
     callback toggle-favorite(int);
     callback open-favorite(int);
     callback remove-favorite(int);
+    // Show the Libraries page, where libraries are arranged.
+    callback show-libraries();
     // Asks Rust to load the lists again, e.g. when Home shows.
     callback refresh();
 }

@@ -65,6 +65,8 @@ macro_rules! wire_callbacks {
         });
         let h = $home.clone();
         model.on_add_source(move || h.pick_folder());
+        let h = $home.clone();
+        model.on_show_libraries(move || h.browser.show_libraries());
         // Rebuilds the tiles, so it waits for the click (and the menu that
         // asked) to end.
         let h = $home.clone();
