@@ -64,13 +64,9 @@ macro_rules! wire_callbacks {
             });
         });
         let l = $this.clone();
-        model.on_show_on_home(move |show| {
+        model.on_show_on_home(move |i, show| {
             let l = l.clone();
-            later(move || {
-                if let Some(index) = l.edited_index() {
-                    l.browser.set_source_hidden(index, !show);
-                }
-            });
+            later(move || l.browser.set_source_hidden(i as usize, !show));
         });
         let l = $this.clone();
         model.on_resume(move |choice| l.set_resume(choice));

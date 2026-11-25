@@ -56,15 +56,15 @@ Sidebar, then:
 1. Title "Home" and a search button.
 2. "Continue watching": up to 4 cards in one row, most recent first. Hidden when empty.
 3. "Favourites", when there are any: starred libraries, then starred folders (with "Library / parent" under the name), as SourceTiles. Hidden when empty.
-4. "Libraries" with "Manage" (to the Libraries page) and "Add library" buttons: grid of SourceTiles, 3 per row, favourites first, then the user's order. Libraries with "Show on Home" off are left out of Home altogether, Favourites too.
+4. "Libraries" with "Manage" (to the Libraries page) and "Add library" buttons: grid of SourceTiles, 3 per row, favourites first, then the user's order. Libraries hidden from Home (the eye on the Libraries page) are left out of Home altogether, Favourites too.
 
 Tapping a card resumes playback. Tapping a library opens it in the folder browser. A library tile's menu has "Add to / Remove from favourites" and "Manage libraries…"; a Favourites tile's menu only unstars it. Home is for watching: arranging libraries happens on the Libraries page.
 
 ### Libraries
 
-The sidebar's Libraries item opens the list of all libraries, also those left off Home ("Not on Home" under the path), with "Add library". Libraries are arranged here. Each row has a drag handle, its name and path, a star, up and down buttons (within its group: favourites stay first) and a settings button. Tapping the row opens the folder browser at its root. Drag the handle to reorder; with a finger, rest on it a moment first, since a quick swipe scrolls the list.
+The sidebar's Libraries item opens the list of all libraries, also those left off Home, with "Add library". Libraries are arranged here. Each row has a drag handle, its name and path, a star, an eye (shown on Home, or crossed out when left off), up and down buttons (within its group: favourites stay first) and a settings button. Tapping the row opens the folder browser at its root. Drag the handle to reorder; with a finger, rest on it a moment first, since a quick swipe scrolls the list.
 
-The settings button opens the library's dialog over a scrim: its name (empty goes back to the folder's name), "Show on Home", its own "Resume where you left off" (Same as Playback, On, Off), and "Remove library", which asks again since it forgets the watch state. Changes save at once, the name on Done or Enter. Escape, the scrim or Done close it. Later sources (SMB address and credentials) add their settings here. Coming back to Libraries from another section returns to the folder last browsed; clicking it again while there goes to the list. A library just added opens right away.
+The settings button opens the library's dialog over a scrim: its name (empty goes back to the folder's name), its own "Resume where you left off" (Same as Playback, On, Off), and "Remove library", which asks again since it forgets the watch state. Changes save at once, the name on Done or Enter. Escape, the scrim or Done close it. Later sources (SMB address and credentials) add their settings here. Coming back to Libraries from another section returns to the folder last browsed; clicking it again while there goes to the list. A library just added opens right away.
 
 ### Folder browser
 

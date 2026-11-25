@@ -875,11 +875,7 @@ impl Browser {
             .iter()
             .map(|s| BrowserItem {
                 label: s.source.name.as_str().into(),
-                detail: if s.hidden {
-                    format!("Not on Home · {}", s.location).into()
-                } else {
-                    s.location.as_str().into()
-                },
+                detail: s.location.as_str().into(),
                 kind: ItemKind::Source,
                 badge: ItemBadge::None,
                 badge_text: SharedString::new(),
