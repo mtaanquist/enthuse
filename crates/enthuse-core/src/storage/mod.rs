@@ -10,6 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, OptionalExtension, params};
 
+use crate::pip::Orientation;
 use crate::settings::{self, FolderOverrides, PlaybackSettings};
 use crate::source::SourcePath;
 use crate::watched::{WatchedMode, WatchedRule, reaches_threshold};
@@ -21,6 +22,8 @@ const KEY_WATCHED_REMAINING: &str = "watched_remaining";
 const KEY_AUTO_NEXT: &str = "auto_next";
 const KEY_RESUME: &str = "resume";
 const KEY_NETWORK_THUMBNAILS: &str = "network_thumbnails";
+const KEY_PIP_SIZE_PORTRAIT: &str = "pip_size_portrait";
+const KEY_PIP_SIZE_LANDSCAPE: &str = "pip_size_landscape";
 
 /// Storage error.
 #[derive(Debug)]
@@ -94,6 +97,13 @@ impl WatchState {
     /// Started but not finished: there is a position and it is not watched.
     pub fn in_progress(&self) -> bool {
         !self.watched && self.position.is_some_and(|p| p > 0.0)
+    }
+}
+
+fn pip_size_key(orientation: Orientation) -> &'static str {
+    match orientation {
+        Orientation::Portrait => KEY_PIP_SIZE_PORTRAIT,
+        Orientation::Landscape => KEY_PIP_SIZE_LANDSCAPE,
     }
 }
 
@@ -447,6 +457,21 @@ impl Store {
 
     pub fn set_network_thumbnails(&self, on: bool) -> Result<()> {
         self.set_setting(KEY_NETWORK_THUMBNAILS, if on { "1" } else { "0" })
+    }
+
+    /// The PiP size the user chose for videos of this orientation, in
+    /// logical pixels (width, height). `None` until they resize one.
+    pub fn pip_size(&self, orientation: Orientation) -> Result<Option<(f32, f32)>> {
+        let value = self.setting(pip_size_key(orientation))?;
+        Ok(value.and_then(|v| {
+            let (w, h) = v.split_once(',')?;
+            let (w, h) = (w.trim().parse::<f32>().ok()?, h.trim().parse::<f32>().ok()?);
+            (w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0).then_some((w, h))
+        }))
+    }
+
+    pub fn set_pip_size(&self, orientation: Orientation, size: (f32, f32)) -> Result<()> {
+        self.set_setting(pip_size_key(orientation), &format!("{},{}", size.0, size.1))
     }
 
     /// Global playback settings, used where no folder overrides them.
@@ -869,5 +894,25 @@ mod tests {
         );
         drop(s);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pip_sizes_per_orientation() {
+        let s = store();
+        assert_eq!(s.pip_size(Orientation::Portrait).unwrap(), None);
+        s.set_pip_size(Orientation::Portrait, (270.5, 480.0))
+            .unwrap();
+        s.set_pip_size(Orientation::Landscape, (640.0, 360.0))
+            .unwrap();
+        assert_eq!(
+            s.pip_size(Orientation::Portrait).unwrap(),
+            Some((270.5, 480.0))
+        );
+        assert_eq!(
+            s.pip_size(Orientation::Landscape).unwrap(),
+            Some((640.0, 360.0))
+        );
+        s.set_setting(KEY_PIP_SIZE_LANDSCAPE, "garbage").unwrap();
+        assert_eq!(s.pip_size(Orientation::Landscape).unwrap(), None);
     }
 }

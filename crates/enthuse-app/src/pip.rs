@@ -11,6 +11,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
+use enthuse_core::pip::{Edges, Orientation, Rect, anchor, fit_area, resize, user_resized};
+use enthuse_core::storage::Store;
 use enthuse_player::Player;
 
 use slint::winit_030::WinitWindowAccessor;
@@ -20,12 +22,11 @@ use slint::{
 };
 
 use crate::browser::{Browser, View};
-use crate::pip_geometry::{Edges, Rect, fit_aspect, resize};
 use crate::pointer;
 use crate::{AppWindow, BrowserModel, BrowserWindow, KeyFocus, PlayerModel};
 
-/// PiP size when entering, in logical pixels; the video's ratio is fitted
-/// into it.
+/// PiP size when entering until the user picks one, in logical pixels; a
+/// video of another shape gets the same area.
 const PIP_SIZE: (f32, f32) = (560.0, 315.0);
 /// Smallest PiP size, in logical pixels. Keep in step with app.slint.
 const PIP_MIN: (f32, f32) = (192.0, 108.0);
@@ -51,6 +52,14 @@ pub struct Pip {
     side: BrowserWindow,
     browser: Rc<Browser>,
     player: Arc<dyn Player>,
+    /// Remembers the PiP size the user chose per orientation.
+    store: Rc<Store>,
+    /// The aspect ratio the window was last fitted to.
+    shown_aspect: Cell<Option<f64>>,
+    /// The window size we last set or saw the user choose. A different
+    /// size later means the user resized it some other way (the window
+    /// system on Wayland, Snap, keyboard), which is remembered too.
+    expected: Cell<Option<(i32, i32)>>,
     /// Set while PiP is on.
     saved: Cell<Option<Saved>>,
     /// Follows the pointer during a move or resize we do ourselves.
@@ -62,6 +71,7 @@ impl Pip {
         main: &AppWindow,
         browser: Rc<Browser>,
         player: Arc<dyn Player>,
+        store: Rc<Store>,
     ) -> Result<Rc<Self>, slint::PlatformError> {
         let side = BrowserWindow::new()?;
         {
@@ -83,6 +93,9 @@ impl Pip {
             side,
             browser,
             player,
+            store,
+            shown_aspect: Cell::new(None),
+            expected: Cell::new(None),
             saved: Cell::new(None),
             drag: RefCell::new(None),
         });
@@ -188,18 +201,23 @@ impl Pip {
         win32::set_rounded(&m, true);
 
         let scale = window.scale_factor();
-        let mut rect = Rect {
-            x: 0,
-            y: 0,
-            w: (PIP_SIZE.0 * scale).round() as i32,
-            h: (PIP_SIZE.1 * scale).round() as i32,
-        };
-        if let Some(a) = aspect(&m) {
-            rect = fit_aspect(rect, a, None);
-        }
+        let screen = monitor(&m);
+        let a = aspect(&m);
+        let (w, h) = self.size_for(
+            (
+                (PIP_SIZE.0 * scale).round() as i32,
+                (PIP_SIZE.1 * scale).round() as i32,
+            ),
+            a,
+            scale,
+            screen,
+        );
+        self.shown_aspect.set(a);
+        self.expected.set(Some((w, h)));
+        let mut rect = Rect { x: 0, y: 0, w, h };
         let placed = !is_wayland(&m)
-            && monitor(&m).is_some_and(|screen| {
-                let margin = (PIP_MARGIN * scale) as i32;
+            && screen.is_some_and(|screen| {
+                let margin = margin(scale);
                 rect.x = screen.x + screen.w - rect.w - margin;
                 rect.y = screen.y + screen.h - rect.h - margin;
                 true
@@ -221,6 +239,8 @@ impl Pip {
         let Some(m) = self.main.upgrade() else {
             return;
         };
+        self.remember_user_resize(&m);
+        self.expected.set(None);
         // Take the browser window's place, as the user left it.
         let target = if self.side.window().is_visible() {
             let mut g = geometry(self.side.window());
@@ -257,7 +277,8 @@ impl Pip {
         m.global::<PlayerModel>().invoke_activity();
     }
 
-    /// Fits the PiP window to a new video's aspect ratio, never taller.
+    /// Fits the PiP window to a new video's aspect ratio: the size the user
+    /// chose for its orientation, else the same area as now (#96).
     fn fit_video(&self) {
         if self.saved.get().is_none() || self.drag.borrow().is_some() {
             return;
@@ -268,10 +289,73 @@ impl Pip {
         let Some(a) = aspect(&m) else {
             return;
         };
+        self.remember_user_resize(&m);
         let current = window_rect(&m);
-        let fitted = fit_aspect(current, a, monitor(&m));
+        let screen = monitor(&m);
+        let size = self.size_for(
+            (current.w, current.h),
+            Some(a),
+            m.window().scale_factor(),
+            screen,
+        );
+        self.shown_aspect.set(Some(a));
+        self.expected.set(Some(size));
+        let fitted = anchor(current, size, screen);
         if fitted != current {
             set_rect(&m, fitted);
+        }
+    }
+
+    /// The PiP size in physical pixels for a video with `aspect`: the size
+    /// the user chose for its orientation, else the area of `like`, in the
+    /// video's shape and within the screen.
+    fn size_for(
+        &self,
+        like: (i32, i32),
+        aspect: Option<f64>,
+        scale: f32,
+        screen: Option<Rect>,
+    ) -> (i32, i32) {
+        let Some(a) = aspect else {
+            return like;
+        };
+        let like = match self.store.pip_size(Orientation::of(a)) {
+            Ok(Some((w, h))) => ((w * scale).round() as i32, (h * scale).round() as i32),
+            Ok(None) => like,
+            Err(err) => {
+                eprintln!("enthuse: cannot read the PiP size: {err}");
+                like
+            }
+        };
+        let max = screen.map(|s| {
+            let margin = 2 * margin(scale);
+            (s.w - margin, s.h - margin)
+        });
+        fit_area(like, a, min_size(scale), max)
+    }
+
+    /// Remembers `size` (physical pixels) as the user's PiP size for videos
+    /// shaped like `aspect`.
+    fn remember(&self, aspect: f64, size: (i32, i32), scale: f32) {
+        if size.0 <= 0 || size.1 <= 0 || scale.is_nan() || scale <= 0.0 {
+            return;
+        }
+        let logical = (size.0 as f32 / scale, size.1 as f32 / scale);
+        if let Err(err) = self.store.set_pip_size(Orientation::of(aspect), logical) {
+            eprintln!("enthuse: cannot save the PiP size: {err}");
+        }
+    }
+
+    /// If the user resized the window some way other than our own drag,
+    /// remembers its size for the video it was showing.
+    fn remember_user_resize(&self, m: &AppWindow) {
+        let (Some(expected), Some(a)) = (self.expected.get(), self.shown_aspect.get()) else {
+            return;
+        };
+        let r = window_rect(m);
+        if user_resized(expected, (r.w, r.h), a) {
+            self.remember(a, (r.w, r.h), m.window().scale_factor());
+            self.expected.set(Some((r.w, r.h)));
         }
     }
 
@@ -299,10 +383,7 @@ impl Pip {
             start.y + (y * scale).round() as i32,
         );
         let edges = direction.map(Edges::from_direction);
-        let min = (
-            (PIP_MIN.0 * scale).round() as i32,
-            (PIP_MIN.1 * scale).round() as i32,
-        );
+        let min = min_size(scale);
         let ratio = aspect(&m);
         let window = m.as_weak();
         let this = Rc::downgrade(self);
@@ -320,9 +401,17 @@ impl Pip {
                 done = true;
                 // Drop the timer outside its own callback.
                 let this = this.clone();
+                let resized = edges.is_some() && last != start;
+                let size = (last.w, last.h);
                 Timer::single_shot(Duration::ZERO, move || {
                     if let Some(pip) = this.upgrade() {
                         pip.drag.borrow_mut().take();
+                        if let (true, Some(a)) = (resized, ratio) {
+                            pip.remember(a, size, scale);
+                            pip.expected.set(Some(size));
+                        }
+                        // The video may have changed during the drag.
+                        pip.fit_video();
                     }
                 });
                 return;
@@ -352,6 +441,19 @@ fn geometry(window: &slint::Window) -> Saved {
         maximized: window.is_maximized(),
         fullscreen: window.is_fullscreen(),
     }
+}
+
+/// Gap between the PiP window and the screen edges, in physical pixels.
+fn margin(scale: f32) -> i32 {
+    (PIP_MARGIN * scale).round() as i32
+}
+
+/// The smallest PiP size in physical pixels.
+fn min_size(scale: f32) -> (i32, i32) {
+    (
+        (PIP_MIN.0 * scale).round() as i32,
+        (PIP_MIN.1 * scale).round() as i32,
+    )
 }
 
 /// The video's aspect ratio, if known.
@@ -475,7 +577,7 @@ mod win32 {
     };
 
     use crate::AppWindow;
-    use crate::pip_geometry::Rect;
+    use enthuse_core::pip::Rect;
 
     /// Moves and resizes with one `SetWindowPos`. Returns false if the
     /// window handle is not available.
