@@ -6,10 +6,11 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
+use enthuse_core::ended::{ended_early, interrupted};
 use enthuse_core::folder::{display_title, episode_label};
 use enthuse_core::next::next_video;
 use enthuse_core::resume::{SaveSchedule, start_position};
-use enthuse_core::source::SourcePath;
+use enthuse_core::source::{FileStamp, SourcePath};
 use enthuse_core::storage::Store;
 use enthuse_core::up_next::{UpNext, UpNextState};
 use enthuse_player::{EndReason, Player, PlayerEvent};
@@ -28,6 +29,14 @@ struct Current {
     source: SourceRef,
     path: SourcePath,
     duration: Option<f64>,
+    /// Last position the player reported; it reads as unknown once the
+    /// file ends.
+    position: f64,
+    /// Size and time of the file when it was opened, once looked up, to
+    /// tell a share that dropped from a real end of file (#57).
+    stamp: Option<FileStamp>,
+    /// The file could no longer be read; Retry resumes at `position`.
+    lost: bool,
     schedule: SaveSchedule,
     up_next: UpNext,
     /// The player opened the file. An error before that means it could not
@@ -129,6 +138,12 @@ impl Nav {
 
     /// Plays `path` from `source`, resuming where it was left off.
     pub fn play(self: &Rc<Self>, source: SourceRef, path: SourcePath) {
+        self.play_from(source, path, None);
+    }
+
+    /// Plays `path` from `source` at `start`, or by default where it was
+    /// left off (if resume is on for its folder).
+    fn play_from(self: &Rc<Self>, source: SourceRef, path: SourcePath, start: Option<f64>) {
         let Some(w) = self.window.upgrade() else {
             return;
         };
@@ -143,10 +158,10 @@ impl Nav {
                     .store
                     .playback_settings(source.id, &folder)
                     .map_or(true, |s| s.resume);
-                let start = if resume {
-                    start_position(state.as_ref(), &rule)
-                } else {
-                    None
+                let start = match start {
+                    Some(start) => Some(start),
+                    None if resume => start_position(state.as_ref(), &rule),
+                    None => None,
                 };
                 if let Err(err) = self.playback.open(&url, path.name().unwrap_or(&url), start) {
                     self.show_browser();
@@ -156,10 +171,14 @@ impl Nav {
                 *self.next.borrow_mut() = None;
                 self.show_up_next(UpNextState::Hidden);
                 self.find_next(&source, &path);
+                self.find_stamp(&source, &path);
                 *self.current.borrow_mut() = Some(Current {
                     source,
                     path,
                     duration: state.and_then(|s| s.duration),
+                    position: start.unwrap_or(0.0),
+                    stamp: None,
+                    lost: false,
                     schedule: SaveSchedule::new(start),
                     up_next: UpNext::new(),
                     loaded: false,
@@ -193,6 +212,25 @@ impl Nav {
                         this.want_thumbnail(&source, next);
                     }
                     *this.next.borrow_mut() = next;
+                }
+            },
+        );
+    }
+
+    /// Looks up, off the UI thread, the size and time of the file that just
+    /// opened, to compare with if it ends early.
+    fn find_stamp(self: &Rc<Self>, source: &SourceRef, path: &SourcePath) {
+        let this = Rc::downgrade(self);
+        let generation = self.generation.get();
+        let (src, path) = (source.source.clone(), path.clone());
+        bg::spawn(
+            move || src.stamp(&path),
+            move |stamp| {
+                if let Some(this) = this.upgrade()
+                    && this.generation.get() == generation
+                    && let Some(current) = this.current.borrow_mut().as_mut()
+                {
+                    current.stamp = stamp;
                 }
             },
         );
@@ -234,14 +272,19 @@ impl Nav {
 
     /// Retry after a playback error.
     fn retry(self: &Rc<Self>) {
-        let current = self
-            .current
-            .borrow()
-            .as_ref()
-            .map(|c| (c.source.clone(), c.path.clone(), c.up_next.is_cancelled()));
+        let current = self.current.borrow().as_ref().map(|c| {
+            let start = c.lost.then_some(c.position).filter(|p| *p > 0.0);
+            (
+                c.source.clone(),
+                c.path.clone(),
+                c.up_next.is_cancelled(),
+                start,
+            )
+        });
         match current {
-            Some((source, path, cancelled)) => {
-                self.play(source, path);
+            Some((source, path, cancelled, start)) => {
+                // A file that was cut off goes on where it stopped.
+                self.play_from(source, path, start);
                 // Cancel holds for the file, also after a retry.
                 if cancelled && let Some(c) = self.current.borrow_mut().as_mut() {
                     c.up_next.cancel();
@@ -334,6 +377,7 @@ impl Nav {
                     let Some(current) = current.as_mut() else {
                         return;
                     };
+                    current.position = *p;
                     if current.schedule.due(*p) {
                         self.store_position(current, *p, false);
                     }
@@ -376,9 +420,58 @@ impl Nav {
         self.auto_next.set(self.store.auto_next().unwrap_or(true));
     }
 
+    /// The player reached the end of the data. Well before the duration,
+    /// that can be a share that dropped (#57): check that the file is still
+    /// there before treating it as watched and going on.
+    fn finished(self: &Rc<Self>) {
+        let check = self.current.borrow().as_ref().and_then(|c| {
+            ended_early(Some(c.position), c.duration)
+                .then(|| (c.source.source.clone(), c.path.clone(), c.stamp))
+        });
+        let Some((src, path, before)) = check else {
+            self.complete();
+            return;
+        };
+        // Can take a while on a share that is gone.
+        self.playback.set_buffering(true);
+        let this = Rc::downgrade(self);
+        let generation = self.generation.get();
+        bg::spawn(
+            move || src.stamp(&path),
+            move |now| {
+                let Some(this) = this.upgrade() else {
+                    return;
+                };
+                if this.generation.get() != generation {
+                    return; // The user moved on meanwhile.
+                }
+                this.playback.set_buffering(false);
+                if interrupted(before, now) {
+                    this.lost_file();
+                } else {
+                    this.complete();
+                }
+            },
+        );
+    }
+
+    /// The file was cut off: keep its resume point, don't mark it watched
+    /// and don't go on into the same share. Retry resumes it once the share
+    /// is back; Back returns to the browser.
+    fn lost_file(self: &Rc<Self>) {
+        if let Some(current) = self.current.borrow_mut().as_mut() {
+            current.lost = true;
+            self.store_position(current, current.position, false);
+        }
+        self.show_up_next(UpNextState::Hidden);
+        self.playback.set_has_next(false);
+        self.playback
+            .show_message("Lost access to this file. Check the network share, then Retry.");
+    }
+
     /// The current file played to its end: mark it watched and go on to the
     /// next one in its folder, unless auto-next is off.
-    fn finished(self: &Rc<Self>) {
+    fn complete(self: &Rc<Self>) {
         let Some(current) = self.current.borrow_mut().take() else {
             self.show_browser();
             return;

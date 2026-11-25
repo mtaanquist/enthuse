@@ -358,6 +358,18 @@ impl Playback {
         self.with_model(|m| m.set_remaining_text(text.into()));
     }
 
+    /// Shows `message` over the video with Retry and Back, in the PiP
+    /// window too, e.g. when the file can no longer be read.
+    pub fn show_message(&self, message: &str) {
+        let message = SharedString::from(message);
+        each_view!(self, w => w.set_message(message.clone()));
+    }
+
+    /// Shows or hides the spinner, e.g. while Nav checks a file.
+    pub fn set_buffering(&self, buffering: bool) {
+        self.with_model(|m| m.set_buffering(buffering));
+    }
+
     /// Tells the screen whether a next file exists, for the next button.
     pub fn set_has_next(&self, has_next: bool) {
         self.with_model(|m| m.set_has_next(has_next));
